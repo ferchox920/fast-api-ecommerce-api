@@ -4,7 +4,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.openapi.utils import get_openapi
 
 from app.core.config import settings
-from app.api.routers import auth, users, admin, products, categories, brands
+from app.api.routers import auth, users, admin, products, categories, brands, variants
 
 # --- Metadatos / tags ---
 TAGS_METADATA = [
@@ -14,6 +14,7 @@ TAGS_METADATA = [
     {"name": "products", "description": "Catálogo público y gestión de productos/variantes (solo admins para escribir)."},
     {"name": "categories", "description": "Listado público y CRUD de categorías (admin)."},
     {"name": "brands", "description": "Listado público y CRUD de marcas (admin)."},
+    {"name": "variants", "description": "Gestión de variantes (SKU, stock, color, talle)."},
 ]
 
 app = FastAPI(
@@ -53,7 +54,7 @@ app.include_router(admin.router, prefix=settings.API_V1_STR)
 app.include_router(products.router, prefix=settings.API_V1_STR)
 app.include_router(categories.router, prefix=settings.API_V1_STR)
 app.include_router(brands.router, prefix=settings.API_V1_STR)
-
+app.include_router(variants.router, prefix=settings.API_V1_STR)
 # --- OpenAPI con securitySchemes (Bearer + OAuth2 Password) ---
 def custom_openapi():
     if app.openapi_schema:
