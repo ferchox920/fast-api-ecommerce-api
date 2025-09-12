@@ -1,6 +1,6 @@
-from pydantic import BaseModel, Field, field_validator
+# app/schemas/variant.py
+from pydantic import BaseModel, Field, field_validator, ConfigDict
 from typing import Optional
-
 
 class VariantBase(BaseModel):
     sku: str = Field(..., min_length=2, max_length=64)
@@ -61,5 +61,5 @@ class VariantRead(VariantBase):
     id: str
     product_id: str
 
-    class Config:
-        from_attributes = True
+    # Pydantic v2: reemplaza class Config
+    model_config = ConfigDict(from_attributes=True)

@@ -36,23 +36,28 @@ def db_session():
     connection = sync_engine.connect()
     transaction = connection.begin()
     session = TestingSessionLocal(bind=connection)
-    yield session
-    session.close()
-    transaction.rollback()
-    connection.close()
+    try:
+        yield session
+    finally:
+        # 🔑 Hacer rollback ANTES de cerrar para evitar SAWarning
+        if transaction.is_active:
+            transaction.rollback()
+        session.close()
+        connection.close()
 
 @pytest_asyncio.fixture()
 async def client(db_session):
     """Provee un AsyncClient con DB inyectada."""
     def override_get_db():
-        try:
-            yield db_session
-        finally:
-            db_session.close()
+        # 🔑 No cerrar la sesión acá; la cierra el fixture db_session
+        yield db_session
 
     app.dependency_overrides[get_db] = override_get_db
 
-    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as ac:
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app),
+        base_url="http://test",
+    ) as ac:
         yield ac
 
 @pytest.fixture()

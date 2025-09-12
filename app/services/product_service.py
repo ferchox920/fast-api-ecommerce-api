@@ -2,6 +2,7 @@ from typing import Sequence
 from sqlalchemy.orm import Session
 from sqlalchemy import select, and_, or_, func
 from fastapi import HTTPException
+from sqlalchemy.exc import IntegrityError
 import re
 import unicodedata
 import uuid
@@ -152,7 +153,6 @@ def update_product(db: Session, prod: Product, changes: ProductUpdate) -> Produc
         if new_slug and new_slug != prod.slug and _slug_exists(db, new_slug):
             raise HTTPException(status_code=400, detail="Product slug already exists")
         data["slug"] = new_slug or prod.slug
-    # Si quisieras sincronizar slug cuando cambian title sin mandar slug, podés hacerlo aquí.
 
     for k, v in data.items():
         setattr(prod, k, v)
@@ -162,14 +162,61 @@ def update_product(db: Session, prod: Product, changes: ProductUpdate) -> Produc
 
 # ---------- Admin: Variants ----------
 def add_variant(db: Session, product_id: str, data: ProductVariantCreate) -> ProductVariant:
-    var = ProductVariant(product_id=_as_uuid(product_id, "product_id"), **data.model_dump())
-    db.add(var); db.commit(); db.refresh(var)
+    # Validación de stock
+    if (
+        data.stock_reserved is not None
+        and data.stock_on_hand is not None
+        and data.stock_reserved > data.stock_on_hand
+    ):
+        raise HTTPException(status_code=400, detail="stock_reserved no puede exceder stock_on_hand")
+
+    # Normalizaciones simples
+    payload = data.model_dump()
+    payload["sku"] = payload["sku"].strip()
+    if payload.get("barcode"): payload["barcode"] = payload["barcode"].strip()
+    payload["size_label"] = payload["size_label"].strip()
+    payload["color_name"] = payload["color_name"].strip()
+    if payload.get("color_hex"): payload["color_hex"] = payload["color_hex"].strip()
+
+    var = ProductVariant(
+        product_id=_as_uuid(product_id, "product_id"),
+        **payload
+    )
+    db.add(var)
+    try:
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        # SKU único
+        raise HTTPException(status_code=400, detail="SKU ya existe")
+    db.refresh(var)
     return var
 
 def update_variant(db: Session, variant: ProductVariant, changes: ProductVariantUpdate) -> ProductVariant:
-    for k, v in changes.model_dump(exclude_unset=True).items():
-        setattr(variant, k, v)
-    db.add(variant); db.commit(); db.refresh(variant)
+    payload = changes.model_dump(exclude_unset=True)
+
+    # Calcular nuevos stocks para validar coherencia
+    new_on_hand = payload.get("stock_on_hand", variant.stock_on_hand)
+    new_reserved = payload.get("stock_reserved", variant.stock_reserved)
+
+    if new_on_hand is not None and new_on_hand < 0:
+        raise HTTPException(status_code=400, detail="Stock no puede ser negativo")
+    if new_reserved is not None and new_reserved < 0:
+        raise HTTPException(status_code=400, detail="Stock no puede ser negativo")
+    if new_reserved > new_on_hand:
+        raise HTTPException(status_code=400, detail="stock_reserved no puede exceder stock_on_hand")
+
+    # Actualizar campos
+    for f, v in payload.items():
+        setattr(variant, f, v)
+
+    db.add(variant)
+    try:
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        raise HTTPException(status_code=400, detail="Violación de integridad")
+    db.refresh(variant)
     return variant
 
 def get_variant(db: Session, variant_id: str) -> ProductVariant | None:
@@ -181,11 +228,14 @@ def delete_variant(db: Session, variant: ProductVariant) -> None:
 # ---------- Admin: Stock ----------
 def set_stock(db: Session, variant: ProductVariant, on_hand: int | None = None, reserved: int | None = None) -> ProductVariant:
     if on_hand is not None:
-        variant.stock_on_hand = max(0, on_hand)
+        if on_hand < 0:
+            raise HTTPException(status_code=400, detail="Stock no puede ser negativo")
+        variant.stock_on_hand = on_hand
     if reserved is not None:
-        reserved = max(0, reserved)
-        if reserved > variant.stock_on_hand:
-            reserved = variant.stock_on_hand
+        if reserved < 0:
+            raise HTTPException(status_code=400, detail="Stock no puede ser negativo")
+        if reserved > (variant.stock_on_hand if on_hand is None else on_hand):
+            raise HTTPException(status_code=400, detail="stock_reserved no puede exceder stock_on_hand")
         variant.stock_reserved = reserved
     db.add(variant); db.commit(); db.refresh(variant)
     return variant
