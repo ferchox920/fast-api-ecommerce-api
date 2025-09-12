@@ -1,0 +1,55 @@
+# app/core/config.py
+import os
+from dotenv import load_dotenv
+from types import SimpleNamespace
+from pathlib import Path
+
+load_dotenv(Path(__file__).resolve().parents[2] / ".env", override=True)
+
+SECRET_KEY = os.getenv("SECRET_KEY", "changeme")
+REFRESH_SECRET_KEY = os.getenv("REFRESH_SECRET_KEY", "")
+DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///./test.db")
+
+ACCESS_TOKEN_EXPIRE_MINUTES = int(os.getenv("ACCESS_TOKEN_EXPIRE_MINUTES", 60))
+REFRESH_TOKEN_EXPIRE_DAYS = int(os.getenv("REFRESH_TOKEN_EXPIRE_DAYS", 15))
+VERIFY_TOKEN_EXPIRE_HOURS = int(os.getenv("VERIFY_TOKEN_EXPIRE_HOURS", 24))
+ENFORCE_EMAIL_VERIFICATION = os.getenv("ENFORCE_EMAIL_VERIFICATION", "true").lower() == "true"
+
+API_V1_STR = os.getenv("API_V1_STR", "/api/v1")
+PROJECT_NAME = os.getenv("PROJECT_NAME", "E-Commerce API")
+JWT_ALGORITHM = os.getenv("JWT_ALGORITHM", "HS256")
+
+# Email (SMTP opcional; si no hay, devolvemos el link en respuesta dev)
+EMAILS_ENABLED = os.getenv("EMAILS_ENABLED", "false").lower() == "true"
+SMTP_HOST = os.getenv("SMTP_HOST", "")
+SMTP_PORT = int(os.getenv("SMTP_PORT", "587"))
+SMTP_USER = os.getenv("SMTP_USER", "")
+SMTP_PASSWORD = os.getenv("SMTP_PASSWORD", "")
+SMTP_TLS = os.getenv("SMTP_TLS", "true").lower() == "true"
+EMAIL_FROM = os.getenv("EMAIL_FROM", "no-reply@example.com")
+
+# Para construir links de verificación
+API_BASE_URL = os.getenv("API_BASE_URL", "http://127.0.0.1:8000")
+FRONTEND_URL = os.getenv("FRONTEND_URL", "")
+
+settings = SimpleNamespace(
+    SECRET_KEY=SECRET_KEY,
+    REFRESH_SECRET_KEY=REFRESH_SECRET_KEY,
+    DATABASE_URL=DATABASE_URL,
+    ACCESS_TOKEN_EXPIRE_MINUTES=ACCESS_TOKEN_EXPIRE_MINUTES,
+    REFRESH_TOKEN_EXPIRE_DAYS=REFRESH_TOKEN_EXPIRE_DAYS,
+    VERIFY_TOKEN_EXPIRE_HOURS=VERIFY_TOKEN_EXPIRE_HOURS,
+    ENFORCE_EMAIL_VERIFICATION=ENFORCE_EMAIL_VERIFICATION,
+    API_V1_STR=API_V1_STR,
+    PROJECT_NAME=PROJECT_NAME,
+    JWT_ALGORITHM=JWT_ALGORITHM,
+    EMAILS_ENABLED=EMAILS_ENABLED,
+    SMTP_HOST=SMTP_HOST,
+    SMTP_PORT=SMTP_PORT,
+    SMTP_USER=SMTP_USER,
+    SMTP_PASSWORD=SMTP_PASSWORD,
+    SMTP_TLS=SMTP_TLS,
+    EMAIL_FROM=EMAIL_FROM,
+    API_BASE_URL=API_BASE_URL,
+    FRONTEND_URL=FRONTEND_URL,
+)

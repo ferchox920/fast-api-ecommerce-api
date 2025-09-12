@@ -1,0 +1,52 @@
+# --- Entorno virtual ---
+.venv/
+venv/
+ENV/
+env/
+
+# --- Archivos de Python ---
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.pdb
+*.pkl
+*.egg-info/
+*.egg
+*.log
+
+# --- Configuración y secretos ---
+.env
+.env.* 
+*.sqlite
+*.db
+instance/
+
+# --- Salida de pruebas y coverage ---
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+.mypy_cache/
+.cache/
+coverage.xml
+
+# --- IDEs y editores ---
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# --- Archivos de sistema ---
+.DS_Store
+Thumbs.db
+
+# --- Build / Dist ---
+dist/
+build/
+*.spec
+
+# --- Otros ---
+*.bak
+*.tmp
+*.log
