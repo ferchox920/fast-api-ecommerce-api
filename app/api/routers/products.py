@@ -8,34 +8,46 @@ from app.schemas.product import (
     ProductVariantRead, ProductVariantCreate, ProductVariantUpdate,
     ProductImageRead, ProductImageCreate,
 )
+from math import ceil  # <-- agregar
+from app.schemas.pagination import PaginatedProducts  # <-- nuevo
 from app.models.product import Product, ProductVariant, ProductImage
 from app.services import product_service
 
 router = APIRouter(prefix="/products", tags=["products"])
 
 # ---------- Público ----------
-@router.get("", response_model=dict)
+@router.get("", response_model=PaginatedProducts)
 def public_list(
-    q: str | None = Query(None),
-    category_id: str | None = Query(None),
-    brand_id: str | None = Query(None),
-    color: str | None = Query(None),
-    size: str | None = Query(None),
-    gender: str | None = Query(None),
-    fit: str | None = Query(None),
-    season: str | None = Query(None),
-    price_min: float | None = Query(None, ge=0),
-    price_max: float | None = Query(None, ge=0),
-    skip: int = Query(0, ge=0),
+    search: str | None = Query(None, description="texto a buscar"),
+    category: str | None = Query(None, description="UUID de categoría"),
+    brand: str | None = Query(None, description="UUID de marca"),
+    min_price: float | None = Query(None, ge=0),
+    max_price: float | None = Query(None, ge=0),
     limit: int = Query(20, ge=1, le=100),
+    offset: int = Query(0, ge=0),
     db: Session = Depends(get_db),
 ):
-    items = product_service.list_products(
-        db, q, category_id, brand_id, color, size, gender, fit, season, price_min, price_max, skip, limit
+    items, total = product_service.list_products_with_total(
+        db=db,
+        search=search,
+        category=category,
+        brand=brand,
+        min_price=min_price,
+        max_price=max_price,
+        limit=limit,
+        offset=offset,
     )
-    # Convertir ORM -> schema para serializar correctamente
-    items_read = [ProductRead.model_validate(p) for p in items]
-    return {"items": items_read, "total": len(items_read)}
+    page = (offset // limit) + 1 if limit else 1
+    pages = ceil(total / limit) if limit else 1
+
+    # Devolvemos ORM directamente; FastAPI + Pydantic hacen el modelado a ProductRead
+    return {
+        "total": total,
+        "page": page,
+        "pages": pages,
+        "limit": limit,
+        "items": items,
+    }
 
 @router.get("/{slug}", response_model=ProductRead)
 def public_get(slug: str, db: Session = Depends(get_db)):

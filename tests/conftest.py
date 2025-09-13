@@ -86,3 +86,32 @@ async def admin_token(client, admin_user):
     )
     assert resp.status_code == 200, resp.text
     return resp.json()["access_token"]
+
+
+@pytest.fixture()
+def normal_user(db_session):
+    from app.models.user import User
+    from app.core.security import get_password_hash
+
+    u = User(
+        email="user@example.com",
+        full_name="User Normal",
+        hashed_password=get_password_hash("User1234"),
+        is_superuser=False,
+        is_active=True,
+        email_verified=True,
+    )
+    db_session.add(u)
+    db_session.commit()
+    db_session.refresh(u)
+    return u
+
+@pytest_asyncio.fixture()
+async def user_token(client, normal_user):
+    resp = await client.post(
+        "/api/v1/auth/login",
+        data={"username": normal_user.email, "password": "User1234"},
+        headers={"Content-Type": "application/x-www-form-urlencoded"},
+    )
+    assert resp.status_code == 200, resp.text
+    return resp.json()["access_token"]

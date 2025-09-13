@@ -1,3 +1,4 @@
+# app/services/product_service.py (agregar)
 from typing import Sequence
 from sqlalchemy.orm import Session
 from sqlalchemy import select, and_, or_, func
@@ -6,6 +7,7 @@ from sqlalchemy.exc import IntegrityError
 import re
 import unicodedata
 import uuid
+from math import ceil
 
 from app.models.product import (
     Product, ProductVariant, ProductImage, Category, Brand
@@ -242,16 +244,96 @@ def set_stock(db: Session, variant: ProductVariant, on_hand: int | None = None, 
 
 # ---------- Admin: Images ----------
 def add_image(db: Session, product_id: str, data: ProductImageCreate) -> ProductImage:
-    img = ProductImage(product_id=_as_uuid(product_id, "product_id"), **data.model_dump())
-    db.add(img); db.commit(); db.refresh(img)
+    pid = _as_uuid(product_id, "product_id")
+
+    existing = (
+        db.query(ProductImage)
+        .filter(ProductImage.product_id == pid)
+        .order_by(ProductImage.sort_order.desc())
+        .all()
+    )
+    has_images = len(existing) > 0
+    max_sort = existing[0].sort_order if has_images else -1
+
+    payload = data.model_dump()
+
+    # 👇 FORZAR str para evitar pasar HttpUrl a SQLite
+    if payload.get("url") is not None:
+        payload["url"] = str(payload["url"])
+
+    if payload.get("sort_order") is None:
+        payload["sort_order"] = max_sort + 1
+
+    img = ProductImage(product_id=pid, **payload)
+    db.add(img)
+    db.flush()
+
+    make_primary = (not has_images) or bool(payload.get("is_primary"))
+    if make_primary:
+        db.query(ProductImage).filter(ProductImage.product_id == pid).update({ProductImage.is_primary: False})
+        db.query(ProductImage).filter(ProductImage.id == img.id).update({ProductImage.is_primary: True})
+
+    db.commit()
+    db.refresh(img)
     return img
 
+
+
 def set_primary_image(db: Session, product: Product, image_id: str) -> Product:
+    """Marca una imagen como principal y desmarca el resto."""
+    # Validar que la imagen pertenezca al producto
+    img = (
+        db.query(ProductImage)
+        .filter(
+            ProductImage.id == _as_uuid(image_id, "image_id"),
+            ProductImage.product_id == product.id,
+        )
+        .first()
+    )
+    if not img:
+        raise HTTPException(status_code=404, detail="Image not found for this product")
+
     # desmarcar todas y marcar una
     db.query(ProductImage).filter(ProductImage.product_id == product.id).update({ProductImage.is_primary: False})
-    db.query(ProductImage).filter(
-        ProductImage.id == _as_uuid(image_id, "image_id"),
-        ProductImage.product_id == product.id
-    ).update({ProductImage.is_primary: True})
-    db.commit(); db.refresh(product)
+    db.query(ProductImage).filter(ProductImage.id == img.id).update({ProductImage.is_primary: True})
+
+    db.commit()
+    db.refresh(product)
     return product
+
+
+
+
+def list_products_with_total(
+    db: Session,
+    search: str | None = None,
+    category: str | None = None,
+    brand: str | None = None,
+    min_price: float | None = None,
+    max_price: float | None = None,
+    limit: int = 20,
+    offset: int = 0,
+) -> tuple[list[Product], int]:
+    stmt = select(Product).where(Product.active == True)  # noqa: E712
+
+    if search:
+        like = f"%{search}%"
+        stmt = stmt.where(or_(Product.title.ilike(like), Product.description.ilike(like)))
+    if category:
+        stmt = stmt.where(Product.category_id == _as_uuid(category, "category"))
+    if brand:
+        stmt = stmt.where(Product.brand_id == _as_uuid(brand, "brand"))
+    if min_price is not None:
+        stmt = stmt.where(Product.price >= min_price)
+    if max_price is not None:
+        stmt = stmt.where(Product.price <= max_price)
+
+    # total SIN limit/offset (usamos subquery para evitar problemas con ORDER/LIMIT)
+    base_subq = stmt.order_by(None).subquery()
+    total = db.execute(select(func.count()).select_from(base_subq)).scalar_one()
+
+    items = db.execute(
+        stmt.order_by(Product.created_at.desc()).offset(offset).limit(limit)
+    ).scalars().all()
+
+    return items, total
