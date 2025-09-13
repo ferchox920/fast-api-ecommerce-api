@@ -1,13 +1,12 @@
-# app/services/product_service.py (agregar)
-from typing import Sequence
+# app/services/product_service.py
+from typing import Sequence, TYPE_CHECKING
 from sqlalchemy.orm import Session
-from sqlalchemy import select, and_, or_, func
+from sqlalchemy import select, and_, or_, func, text, inspect
 from fastapi import HTTPException
 from sqlalchemy.exc import IntegrityError
 import re
 import unicodedata
 import uuid
-from math import ceil
 
 from app.models.product import (
     Product, ProductVariant, ProductImage, Category, Brand
@@ -18,9 +17,13 @@ from app.schemas.product import (
     ProductImageCreate
 )
 
+if TYPE_CHECKING:
+    # Solo para type hints, no ejecuta en runtime (evita ciclos)
+    from app.models.inventory import InventoryMovement as _InventoryMovement
+
+
 # ---------------- Utils: slug ----------------
 def _slugify(text: str) -> str:
-    # Normaliza, quita acentos y símbolos, y pasa a kebab-case
     text = unicodedata.normalize("NFKD", text)
     text = "".join(c for c in text if not unicodedata.combining(c))
     text = re.sub(r"[^a-zA-Z0-9\s-]", "", text)
@@ -103,7 +106,6 @@ def create_product(db: Session, payload: ProductCreate) -> Product:
     # --- slug ---
     raw_slug = (base_data.get("slug") or "").strip()
     base_slug = _slugify(raw_slug or base_data["title"])
-    # Política del test: título repetido -> mismo slug -> debe fallar (400)
     if _slug_exists(db, base_slug):
         raise HTTPException(status_code=400, detail="Product slug already exists")
 
@@ -113,13 +115,9 @@ def create_product(db: Session, payload: ProductCreate) -> Product:
     category_uuid = _as_uuid(raw_category_id, "category_id")
     brand_uuid    = _as_uuid(raw_brand_id, "brand_id")
 
-    # evitar duplicar el argumento slug
     base_data.pop("slug", None)
 
-    # crear producto SIN las FKs primero
     prod = Product(**base_data, slug=base_slug)
-
-    # asignar FKs ya como uuid.UUID
     prod.category_id = category_uuid
     prod.brand_id = brand_uuid
 
@@ -143,13 +141,11 @@ def create_product(db: Session, payload: ProductCreate) -> Product:
 def update_product(db: Session, prod: Product, changes: ProductUpdate) -> Product:
     data = changes.model_dump(exclude_unset=True)
 
-    # Coerción a UUID si actualizan FKs
     if "category_id" in data:
         data["category_id"] = _as_uuid(data["category_id"], "category_id")
     if "brand_id" in data:
         data["brand_id"] = _as_uuid(data["brand_id"], "brand_id")
 
-    # Si actualizan el slug, normalizar y validar unicidad (si lo cambian efectivamente)
     if "slug" in data and data["slug"] is not None:
         new_slug = _slugify((data["slug"] or "").strip())
         if new_slug and new_slug != prod.slug and _slug_exists(db, new_slug):
@@ -164,7 +160,6 @@ def update_product(db: Session, prod: Product, changes: ProductUpdate) -> Produc
 
 # ---------- Admin: Variants ----------
 def add_variant(db: Session, product_id: str, data: ProductVariantCreate) -> ProductVariant:
-    # Validación de stock
     if (
         data.stock_reserved is not None
         and data.stock_on_hand is not None
@@ -172,7 +167,6 @@ def add_variant(db: Session, product_id: str, data: ProductVariantCreate) -> Pro
     ):
         raise HTTPException(status_code=400, detail="stock_reserved no puede exceder stock_on_hand")
 
-    # Normalizaciones simples
     payload = data.model_dump()
     payload["sku"] = payload["sku"].strip()
     if payload.get("barcode"): payload["barcode"] = payload["barcode"].strip()
@@ -189,7 +183,6 @@ def add_variant(db: Session, product_id: str, data: ProductVariantCreate) -> Pro
         db.commit()
     except IntegrityError:
         db.rollback()
-        # SKU único
         raise HTTPException(status_code=400, detail="SKU ya existe")
     db.refresh(var)
     return var
@@ -197,7 +190,6 @@ def add_variant(db: Session, product_id: str, data: ProductVariantCreate) -> Pro
 def update_variant(db: Session, variant: ProductVariant, changes: ProductVariantUpdate) -> ProductVariant:
     payload = changes.model_dump(exclude_unset=True)
 
-    # Calcular nuevos stocks para validar coherencia
     new_on_hand = payload.get("stock_on_hand", variant.stock_on_hand)
     new_reserved = payload.get("stock_reserved", variant.stock_reserved)
 
@@ -208,7 +200,6 @@ def update_variant(db: Session, variant: ProductVariant, changes: ProductVariant
     if new_reserved > new_on_hand:
         raise HTTPException(status_code=400, detail="stock_reserved no puede exceder stock_on_hand")
 
-    # Actualizar campos
     for f, v in payload.items():
         setattr(variant, f, v)
 
@@ -257,7 +248,7 @@ def add_image(db: Session, product_id: str, data: ProductImageCreate) -> Product
 
     payload = data.model_dump()
 
-    # 👇 FORZAR str para evitar pasar HttpUrl a SQLite
+    # evitar pasar HttpUrl a SQLite
     if payload.get("url") is not None:
         payload["url"] = str(payload["url"])
 
@@ -277,11 +268,7 @@ def add_image(db: Session, product_id: str, data: ProductImageCreate) -> Product
     db.refresh(img)
     return img
 
-
-
 def set_primary_image(db: Session, product: Product, image_id: str) -> Product:
-    """Marca una imagen como principal y desmarca el resto."""
-    # Validar que la imagen pertenezca al producto
     img = (
         db.query(ProductImage)
         .filter(
@@ -293,16 +280,12 @@ def set_primary_image(db: Session, product: Product, image_id: str) -> Product:
     if not img:
         raise HTTPException(status_code=404, detail="Image not found for this product")
 
-    # desmarcar todas y marcar una
     db.query(ProductImage).filter(ProductImage.product_id == product.id).update({ProductImage.is_primary: False})
     db.query(ProductImage).filter(ProductImage.id == img.id).update({ProductImage.is_primary: True})
 
     db.commit()
     db.refresh(product)
     return product
-
-
-
 
 def list_products_with_total(
     db: Session,
@@ -328,7 +311,6 @@ def list_products_with_total(
     if max_price is not None:
         stmt = stmt.where(Product.price <= max_price)
 
-    # total SIN limit/offset (usamos subquery para evitar problemas con ORDER/LIMIT)
     base_subq = stmt.order_by(None).subquery()
     total = db.execute(select(func.count()).select_from(base_subq)).scalar_one()
 
@@ -337,3 +319,210 @@ def list_products_with_total(
     ).scalars().all()
 
     return items, total
+
+# ---------- Movimientos ----------
+def _log_movement(db: Session, variant: ProductVariant, mtype: str, qty: int, reason: str | None):
+    # Insert crudo para evitar import del modelo y ciclos
+    db.execute(
+        text("""
+            INSERT INTO inventory_movements (id, variant_id, quantity, type, reason)
+            VALUES (:id, :variant_id, :quantity, :type, :reason)
+        """),
+        {
+            "id": str(uuid.uuid4()),          # el modelo tenía default en ORM, no en DB; lo generamos aquí
+            "variant_id": str(variant.id),    # aseguramos str/UUID
+            "quantity": int(qty),
+            "type": mtype,
+            "reason": reason,
+        },
+    )
+
+
+def receive_stock(db: Session, variant: ProductVariant, quantity: int, reason: str | None = None) -> ProductVariant:
+    if quantity <= 0:
+        raise HTTPException(status_code=400, detail="quantity debe ser > 0")
+    variant.stock_on_hand += quantity
+    db.add(variant)
+    _log_movement(db, variant, "receive", quantity, reason)
+    db.commit(); db.refresh(variant)
+    return variant
+
+def adjust_stock(db: Session, variant: ProductVariant, quantity: int, reason: str | None = None) -> ProductVariant:
+    new_on_hand = variant.stock_on_hand + quantity
+    if new_on_hand < 0:
+        raise HTTPException(status_code=400, detail="No puede quedar negativo")
+    variant.stock_on_hand = new_on_hand
+    db.add(variant)
+    _log_movement(db, variant, "adjust", abs(quantity), reason)
+    db.commit(); db.refresh(variant)
+    return variant
+
+def reserve_stock(db: Session, variant: ProductVariant, quantity: int, reason: str | None = None) -> ProductVariant:
+    if quantity <= 0:
+        raise HTTPException(status_code=400, detail="quantity debe ser > 0")
+    if variant.stock_reserved + quantity > variant.stock_on_hand:
+        raise HTTPException(status_code=400, detail="No hay stock suficiente para reservar")
+    variant.stock_reserved += quantity
+    db.add(variant)
+    _log_movement(db, variant, "reserve", quantity, reason)
+    db.commit(); db.refresh(variant)
+    return variant
+
+def release_stock(db: Session, variant: ProductVariant, quantity: int, reason: str | None = None) -> ProductVariant:
+    if quantity <= 0:
+        raise HTTPException(status_code=400, detail="quantity debe ser > 0")
+    if quantity > variant.stock_reserved:
+        raise HTTPException(status_code=400, detail="No hay reservado suficiente")
+    variant.stock_reserved -= quantity
+    db.add(variant)
+    _log_movement(db, variant, "release", quantity, reason)
+    db.commit(); db.refresh(variant)
+    return variant
+
+def commit_sale(db: Session, variant: ProductVariant, quantity: int, reason: str | None = None) -> ProductVariant:
+    if quantity <= 0:
+        raise HTTPException(status_code=400, detail="quantity debe ser > 0")
+    if quantity > variant.stock_reserved:
+        if quantity > variant.stock_on_hand:
+            raise HTTPException(status_code=400, detail="No hay stock suficiente para la venta")
+        variant.stock_on_hand -= quantity
+    else:
+        variant.stock_reserved -= quantity
+        variant.stock_on_hand -= quantity
+
+    if variant.stock_on_hand < 0:
+        raise HTTPException(status_code=400, detail="No puede quedar negativo")
+
+    db.add(variant)
+    _log_movement(db, variant, "sale", quantity, reason)
+    db.commit(); db.refresh(variant)
+    return variant
+
+def list_movements(db: Session, variant: ProductVariant, limit: int = 50, offset: int = 0):
+    rows = db.execute(
+        text("""
+            SELECT id, type, quantity, reason, created_at
+            FROM inventory_movements
+            WHERE variant_id = :variant_id
+            ORDER BY created_at DESC
+            LIMIT :limit OFFSET :offset
+        """),
+        {
+            "variant_id": str(variant.id),
+            "limit": int(limit),
+            "offset": int(offset),
+        },
+    ).mappings().all()  # mappings() => dict-like
+    # devolvemos una lista de dicts; MovementRead (UUID/datetime) los parsea sin problemas
+    return [
+        {
+            "id": str(r["id"]),  # por si el driver devuelve UUID/Row proxy
+            "type": r["type"],
+            "quantity": int(r["quantity"]),
+            "reason": r["reason"],
+            "created_at": r["created_at"],
+        }
+        for r in rows
+    ]
+
+
+# ---------- Quality ----------
+def compute_product_quality(db: Session, product: Product) -> dict:
+    points = 0
+    issues: list[str] = []
+
+    # imágenes
+    imgs = db.query(ProductImage).filter(ProductImage.product_id == product.id).all()
+    if imgs:
+        points += 20
+        if any(i.is_primary for i in imgs):
+            points += 10
+        else:
+            issues.append("Falta imagen principal")
+    else:
+        issues.append("Sin imágenes")
+
+    # descripción
+    if (product.description or "") and len(product.description.strip()) >= 50:
+        points += 25
+    else:
+        issues.append("Descripción corta o ausente (>=50)")
+
+    # variantes
+    vars = db.query(ProductVariant).filter(
+        ProductVariant.product_id == product.id,
+        ProductVariant.active == True  # noqa: E712
+    ).all()
+    if vars:
+        points += 20
+    else:
+        issues.append("No hay variantes activas")
+
+    # precio + moneda
+    if product.price is not None and product.currency:
+        points += 20
+    else:
+        issues.append("Falta precio o currency")
+
+    # título
+    if product.title and len(product.title.strip()) >= 8:
+        points += 5
+    else:
+        issues.append("Título muy corto")
+
+    score = min(points, 100)
+    return {"score": score, "issues": issues}
+
+
+# ---------- Admin: Stock Movements ----------
+def _ensure_movements_table(db: Session):
+    """Garantiza que inventory_movements exista (útil en tests SQLite sin migraciones)."""
+    try:
+        dialect = db.bind.dialect.name
+    except Exception:
+        dialect = "unknown"
+
+    if dialect == "sqlite":
+        db.execute(text("""
+            CREATE TABLE IF NOT EXISTS inventory_movements (
+                id TEXT PRIMARY KEY,
+                variant_id TEXT NOT NULL,
+                quantity INTEGER NOT NULL,
+                type VARCHAR(50) NOT NULL,
+                reason VARCHAR(255),
+                created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+            )
+        """))
+    else:
+        insp = inspect(db.bind)
+        if "inventory_movements" not in insp.get_table_names():
+            try:
+                from app.models.inventory import InventoryMovement
+                InventoryMovement.__table__.create(bind=db.bind, checkfirst=True)
+            except Exception:
+                db.execute(text("""
+                    CREATE TABLE IF NOT EXISTS inventory_movements (
+                        id UUID PRIMARY KEY,
+                        variant_id UUID NOT NULL,
+                        quantity INTEGER NOT NULL,
+                        type VARCHAR(50) NOT NULL,
+                        reason VARCHAR(255),
+                        created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+                    )
+                """))
+
+def _log_movement(db: Session, variant: ProductVariant, mtype: str, qty: int, reason: str | None):
+    _ensure_movements_table(db)  # 👈 se asegura que la tabla exista antes de insertar
+    db.execute(
+        text("""
+            INSERT INTO inventory_movements (id, variant_id, quantity, type, reason)
+            VALUES (:id, :variant_id, :quantity, :type, :reason)
+        """),
+        {
+            "id": str(uuid.uuid4()),
+            "variant_id": str(variant.id),
+            "quantity": int(qty),
+            "type": mtype,
+            "reason": reason,
+        },
+    )

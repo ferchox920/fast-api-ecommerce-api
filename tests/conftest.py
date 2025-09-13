@@ -26,6 +26,10 @@ TestingSessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=sync_
 @pytest.fixture(scope="session", autouse=True)
 def setup_database():
     """Crea las tablas en SQLite antes de los tests."""
+    # 🔑 Registrar modelos por efecto lateral ANTES de crear el esquema
+    import app.models.product    # noqa: F401
+    import app.models.inventory  # noqa: F401
+
     Base.metadata.create_all(bind=sync_engine)
     yield
     Base.metadata.drop_all(bind=sync_engine)
@@ -39,7 +43,6 @@ def db_session():
     try:
         yield session
     finally:
-        # 🔑 Hacer rollback ANTES de cerrar para evitar SAWarning
         if transaction.is_active:
             transaction.rollback()
         session.close()
@@ -49,7 +52,6 @@ def db_session():
 async def client(db_session):
     """Provee un AsyncClient con DB inyectada."""
     def override_get_db():
-        # 🔑 No cerrar la sesión acá; la cierra el fixture db_session
         yield db_session
 
     app.dependency_overrides[get_db] = override_get_db
@@ -86,7 +88,6 @@ async def admin_token(client, admin_user):
     )
     assert resp.status_code == 200, resp.text
     return resp.json()["access_token"]
-
 
 @pytest.fixture()
 def normal_user(db_session):

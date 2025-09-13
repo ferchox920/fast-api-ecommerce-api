@@ -4,6 +4,11 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.openapi.utils import get_openapi
 
 from app.core.config import settings
+
+# --- Models registration (efecto lateral: registra tablas en Base.metadata) ---
+import app.models.product  # noqa: F401
+import app.models.inventory  # noqa: F401
+
 from app.api.routers import auth, users, admin, products, categories, brands, variants
 
 # --- Metadatos / tags ---
@@ -55,6 +60,7 @@ app.include_router(products.router, prefix=settings.API_V1_STR)
 app.include_router(categories.router, prefix=settings.API_V1_STR)
 app.include_router(brands.router, prefix=settings.API_V1_STR)
 app.include_router(variants.router, prefix=settings.API_V1_STR)
+
 # --- OpenAPI con securitySchemes (Bearer + OAuth2 Password) ---
 def custom_openapi():
     if app.openapi_schema:
