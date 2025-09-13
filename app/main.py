@@ -6,10 +6,13 @@ from fastapi.openapi.utils import get_openapi
 from app.core.config import settings
 
 # --- Models registration (efecto lateral: registra tablas en Base.metadata) ---
-import app.models.product  # noqa: F401
-import app.models.inventory  # noqa: F401
+import app.models.product        # noqa: F401
+import app.models.inventory      # noqa: F401
+import app.models.supplier       # noqa: F401  # <-- nuevo
+import app.models.purchase       # noqa: F401  # <-- nuevo
 
 from app.api.routers import auth, users, admin, products, categories, brands, variants
+from app.api.routers import purchases  # <-- nuevo
 
 # --- Metadatos / tags ---
 TAGS_METADATA = [
@@ -20,6 +23,7 @@ TAGS_METADATA = [
     {"name": "categories", "description": "Listado público y CRUD de categorías (admin)."},
     {"name": "brands", "description": "Listado público y CRUD de marcas (admin)."},
     {"name": "variants", "description": "Gestión de variantes (SKU, stock, color, talle)."},
+    {"name": "purchases", "description": "Proveedores y órdenes de compra; recepción integra con inventario."},  # <-- nuevo
 ]
 
 app = FastAPI(
@@ -29,7 +33,8 @@ app = FastAPI(
         "API de E-Commerce.\n\n"
         "- **Auth**: OAuth2 Password, JWT (access/refresh), verificación por email.\n"
         "- **Users**: perfil y dirección.\n"
-        "- **Products**: catálogo con variantes (talle/color), imágenes y filtros.\n\n"
+        "- **Products**: catálogo con variantes (talle/color), imágenes y filtros.\n"
+        "- **Purchases**: proveedores y órdenes de compra con recepción contra inventario.\n\n"
         "Usá **Authorize** (Bearer) para probar endpoints protegidos."
     ),
     openapi_tags=TAGS_METADATA,
@@ -53,13 +58,14 @@ app.add_middleware(
 )
 
 # --- Routers ---
-app.include_router(auth.router, prefix=settings.API_V1_STR)
-app.include_router(users.router, prefix=settings.API_V1_STR)
-app.include_router(admin.router, prefix=settings.API_V1_STR)
-app.include_router(products.router, prefix=settings.API_V1_STR)
+app.include_router(auth.router,      prefix=settings.API_V1_STR)
+app.include_router(users.router,     prefix=settings.API_V1_STR)
+app.include_router(admin.router,     prefix=settings.API_V1_STR)
+app.include_router(products.router,  prefix=settings.API_V1_STR)
 app.include_router(categories.router, prefix=settings.API_V1_STR)
-app.include_router(brands.router, prefix=settings.API_V1_STR)
-app.include_router(variants.router, prefix=settings.API_V1_STR)
+app.include_router(brands.router,    prefix=settings.API_V1_STR)
+app.include_router(variants.router,  prefix=settings.API_V1_STR)
+app.include_router(purchases.router, prefix=settings.API_V1_STR)  # <-- nuevo
 
 # --- OpenAPI con securitySchemes (Bearer + OAuth2 Password) ---
 def custom_openapi():
