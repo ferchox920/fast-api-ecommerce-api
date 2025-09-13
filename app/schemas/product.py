@@ -47,7 +47,10 @@ class ProductVariantBase(BaseModel):
     active: bool = True
 
 class ProductVariantCreate(ProductVariantBase):
-    pass
+    # NUEVO: opcionales en create
+    reorder_point: int = Field(default=0, ge=0)
+    reorder_qty:   int = Field(default=0, ge=0)
+    primary_supplier_id: UUID | None = None
 
 class ProductVariantUpdate(BaseModel):
     size_label: str | None = None
@@ -58,9 +61,18 @@ class ProductVariantUpdate(BaseModel):
     price_override: float | None = Field(default=None, ge=0)
     barcode: str | None = None
     active: bool | None = None
+    # NUEVO:
+    reorder_point: int | None = Field(default=None, ge=0)
+    reorder_qty:   int | None = Field(default=None, ge=0)
+    primary_supplier_id: UUID | None = None
 
 class ProductVariantRead(ProductVariantBase):
     id: UUID
+    # NUEVO en lectura
+    reorder_point: int = 0
+    reorder_qty:   int = 0
+    primary_supplier_id: UUID | None = None
+
     model_config = ConfigDict(from_attributes=True)
 
 # --- Product ---
@@ -104,7 +116,7 @@ class ProductRead(ProductBase):
     # IDs como UUID para validar con el ORM
     category_id: Optional[UUID] = None
     brand_id: Optional[UUID] = None
-    # Relaciones anidadas (ya definidas arriba, no necesitan forward-ref string)
+    # Relaciones anidadas
     category: CategoryRead | None = None
     brand: BrandRead | None = None
 

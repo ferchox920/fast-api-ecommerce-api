@@ -17,9 +17,14 @@ if str(BASE_DIR) not in sys.path:
 from app.core.config import settings
 from app.db.session import Base  # tu declarative Base
 
-# IMPORTANTE: importar los modelos para que estén en Base.metadata
-from app.models import user     # noqa: F401
-from app.models import product  # noqa: F401  <-- agrega catálogo (Category, Brand, Product, Variant, Image)
+# IMPORTANTE: importar todos los modelos para poblar Base.metadata
+# Si no tenés __init__.py en app/models, importalos explícitamente:
+from app.models import product   # noqa: F401  # Category, Brand, Product, ProductVariant, ProductImage
+from app.models import supplier  # noqa: F401  # Supplier
+from app.models import purchase  # noqa: F401  # PurchaseOrder, PurchaseOrderLine
+# importa user, inventory, etc. si existen y usan Base
+# from app.models import user     # noqa: F401
+# from app.models import inventory  # noqa: F401
 
 # --- Config de Alembic ---
 config = context.config

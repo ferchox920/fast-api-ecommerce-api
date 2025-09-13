@@ -90,6 +90,15 @@ class ProductVariant(Base):
     stock_on_hand:  Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     stock_reserved: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
 
+    # Reposición (NUEVO)
+    reorder_point: Mapped[int] = mapped_column(Integer, default=0, nullable=False)  # umbral
+    reorder_qty:   Mapped[int] = mapped_column(Integer, default=0, nullable=False)  # lote sugerido
+
+    # Supplier preferido (NUEVO - MVP)
+    primary_supplier_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("suppliers.id", ondelete="SET NULL"), nullable=True
+    )
+
     price_override: Mapped[float | None] = mapped_column(Numeric(10, 2), nullable=True)
 
     active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)

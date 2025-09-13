@@ -1,6 +1,7 @@
-# app/api/routers/purchases.py
 from fastapi import APIRouter, Depends, HTTPException, status, Query
 from sqlalchemy.orm import Session
+from typing import Optional
+from uuid import UUID
 
 from app.db.session import get_db
 from app.api.deps import get_current_admin
@@ -10,6 +11,10 @@ from app.schemas.purchase import (
     POCreate, PORead, POLineCreate, POReceivePayload
 )
 from app.services import purchase_service
+
+# NUEVO: schemas/servicio de reposición
+from app.schemas.inventory_replenishment import ReplenishmentSuggestion, StockAlert
+from app.services import inventory_service
 
 router = APIRouter(prefix="/purchases", tags=["purchases"])
 
@@ -102,3 +107,32 @@ def cancel_po(po_id: str, db: Session = Depends(get_db)):
     if not po:
         raise HTTPException(404, "PO not found")
     return purchase_service.cancel_po(db, po)
+
+# ---------- Replenishment (NUEVO) ----------
+@router.get(
+    "/replenishment/alerts",
+    response_model=list[StockAlert],
+    dependencies=[Depends(get_current_admin)],
+)
+def replenishment_alerts(
+    supplier_id: Optional[UUID] = Query(None),
+    db: Session = Depends(get_db),
+):
+    """
+    Devuelve las variantes que ya cruzaron el umbral (available <= reorder_point).
+    """
+    return inventory_service.compute_stock_alerts(db, supplier_id)
+
+@router.get(
+    "/replenishment/suggestions",
+    response_model=ReplenishmentSuggestion,
+    dependencies=[Depends(get_current_admin)],
+)
+def replenishment_suggestions(
+    supplier_id: Optional[UUID] = Query(None),
+    db: Session = Depends(get_db),
+):
+    """
+    Devuelve sugerencias de compra agrupadas por supplier (si se filtra) o globales.
+    """
+    return inventory_service.compute_replenishment_suggestion(db, supplier_id)
