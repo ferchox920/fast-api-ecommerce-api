@@ -5,6 +5,7 @@ import uuid
 
 from app.db.session import Base
 
+
 # --- Clasificación ---
 class Category(Base):
     __tablename__ = "categories"
@@ -90,14 +91,19 @@ class ProductVariant(Base):
     stock_on_hand:  Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     stock_reserved: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
 
-    # Reposición (NUEVO)
+    # Reposición
     reorder_point: Mapped[int] = mapped_column(Integer, default=0, nullable=False)  # umbral
     reorder_qty:   Mapped[int] = mapped_column(Integer, default=0, nullable=False)  # lote sugerido
 
-    # Supplier preferido (NUEVO - MVP)
+    # Supplier preferido (MVP)
     primary_supplier_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("suppliers.id", ondelete="SET NULL"), nullable=True
     )
+
+    # --- Backorders / Preorders (NUEVO) ---
+    allow_backorder: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    allow_preorder:  Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    release_at = mapped_column(DateTime(timezone=True), nullable=True)
 
     price_override: Mapped[float | None] = mapped_column(Numeric(10, 2), nullable=True)
 
@@ -117,8 +123,8 @@ class ProductImage(Base):
         UUID(as_uuid=True), ForeignKey("products.id", ondelete="CASCADE"), nullable=False
     )
 
-    url:       Mapped[str] = mapped_column(String(512), nullable=False)
-    alt_text:  Mapped[str | None] = mapped_column(String(200), nullable=True)
+    url:        Mapped[str] = mapped_column(String(512), nullable=False)
+    alt_text:   Mapped[str | None] = mapped_column(String(200), nullable=True)
     is_primary: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     sort_order: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
 

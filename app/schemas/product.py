@@ -1,7 +1,7 @@
 from uuid import UUID
 from typing import Optional, List
 from pydantic import BaseModel, Field, HttpUrl, ConfigDict
-
+from datetime import datetime  # <-- NUEVO
 # --- Category / Brand ---
 class CategoryCreate(BaseModel):
     name: str
@@ -35,7 +35,7 @@ class ProductImageRead(ProductImageCreate):
 # --- Variants ---
 class ProductVariantBase(BaseModel):
     sku: str = Field(min_length=1, max_length=64)
-    size_label: str = Field(min_length=1, max_length=24)  # "S","M","L","42"
+    size_label: str = Field(min_length=1, max_length=24)
     color_name: str = Field(min_length=1, max_length=32)
     color_hex: str | None = Field(default=None, pattern=r"^#([0-9a-fA-F]{6})$")
 
@@ -46,8 +46,13 @@ class ProductVariantBase(BaseModel):
     barcode: str | None = Field(default=None, max_length=64)
     active: bool = True
 
+    # --- Backorders / Preorders (NUEVO) ---
+    allow_backorder: bool = False
+    allow_preorder: bool = False
+    release_at: datetime | None = None
+
 class ProductVariantCreate(ProductVariantBase):
-    # NUEVO: opcionales en create
+    # Reposición
     reorder_point: int = Field(default=0, ge=0)
     reorder_qty:   int = Field(default=0, ge=0)
     primary_supplier_id: UUID | None = None
@@ -56,19 +61,27 @@ class ProductVariantUpdate(BaseModel):
     size_label: str | None = None
     color_name: str | None = None
     color_hex: str | None = Field(default=None, pattern=r"^#([0-9a-fA-F]{6})$")
+
     stock_on_hand: int | None = Field(default=None, ge=0)
     stock_reserved: int | None = Field(default=None, ge=0)
     price_override: float | None = Field(default=None, ge=0)
+
     barcode: str | None = None
     active: bool | None = None
-    # NUEVO:
+
+    # Reposición
     reorder_point: int | None = Field(default=None, ge=0)
     reorder_qty:   int | None = Field(default=None, ge=0)
     primary_supplier_id: UUID | None = None
 
+    # --- Backorders / Preorders (NUEVO) ---
+    allow_backorder: bool | None = None
+    allow_preorder: bool | None = None
+    release_at: datetime | None = None
+    
+
 class ProductVariantRead(ProductVariantBase):
     id: UUID
-    # NUEVO en lectura
     reorder_point: int = 0
     reorder_qty:   int = 0
     primary_supplier_id: UUID | None = None
