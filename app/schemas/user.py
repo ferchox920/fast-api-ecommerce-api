@@ -1,5 +1,6 @@
 # app/schemas/user.py
 from pydantic import BaseModel, EmailStr, Field, ConfigDict, HttpUrl
+from typing import Optional, List
 
 class UserBase(BaseModel):
     email: EmailStr
@@ -59,7 +60,7 @@ class UserRead(UserBase):
     oauth_sub: str | None = None
     oauth_picture: HttpUrl | None = None
 
-    # Migrado a Pydantic v2
+    # Pydantic v2
     model_config = ConfigDict(from_attributes=True)
 
 
@@ -70,3 +71,9 @@ class Token(BaseModel):
 
 class TokenPayload(BaseModel):
     sub: str | None = None
+    exp: Optional[int] = None
+    type: Optional[str] = None                 # "access" | "refresh" | "verify_email"
+    scopes: Optional[List[str]] = None         # scopes opcionales
+
+    # Permitir campos extra para compatibilidad futura
+    model_config = ConfigDict(extra="allow")

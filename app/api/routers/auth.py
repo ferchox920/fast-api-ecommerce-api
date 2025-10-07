@@ -50,8 +50,14 @@ def login(
             detail="Email not verified. Verification sent.",
         )
 
-    access = create_access_token(subject=user.id)
-    refresh = create_refresh_token(subject=user.id)
+    # ---- scopes según rol ----
+    user_scopes = ["users:me"]
+    if user.is_superuser:
+        user_scopes += ["admin", "products:write", "purchases:write"]
+
+    # Incluir scopes en ambos tokens
+    access = create_access_token(subject=user.id, extra={"scopes": user_scopes})
+    refresh = create_refresh_token(subject=user.id, extra={"scopes": user_scopes})
 
     # Registrar último acceso
     user.last_login_at = datetime.now(timezone.utc)
@@ -71,13 +77,15 @@ def refresh_token(payload: RefreshRequest):
     try:
         data = decode_refresh_token(payload.refresh_token)
         user_id = data["sub"]  # UUID str
+        token_scopes = data.get("scopes", []) or []
     except (JWTError, KeyError):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid refresh token",
         )
 
-    new_access = create_access_token(subject=user_id)
+    # Preservar scopes del refresh al emitir el nuevo access
+    new_access = create_access_token(subject=user_id, extra={"scopes": token_scopes})
     return {
         "access_token": new_access,
         "token_type": "bearer",
@@ -155,8 +163,13 @@ def oauth_upsert(data: dict, db: Session = Depends(get_db)):
             detail="Email not verified. Verification sent.",
         )
 
-    access = create_access_token(subject=user.id)
-    refresh = create_refresh_token(subject=user.id)
+    # scopes según rol
+    user_scopes = ["users:me"]
+    if user.is_superuser:
+        user_scopes += ["admin", "products:write", "purchases:write"]
+
+    access = create_access_token(subject=user.id, extra={"scopes": user_scopes})
+    refresh = create_refresh_token(subject=user.id, extra={"scopes": user_scopes})
     return {
         "access_token": access,
         "refresh_token": refresh,
