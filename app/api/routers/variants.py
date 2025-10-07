@@ -1,3 +1,4 @@
+from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException, status, Path
 from sqlalchemy.orm import Session
 
@@ -12,7 +13,10 @@ router = APIRouter(prefix="/products", tags=["variants"])
 
 # --------- Público (listar variantes de un producto) ---------
 @router.get("/{product_id}/variants", response_model=list[VariantRead])
-def list_for_product(product_id: str = Path(...), db: Session = Depends(get_db)):
+def list_for_product(
+    product_id: UUID = Path(..., description="UUID del producto"),
+    db: Session = Depends(get_db),
+):
     product = db.get(Product, product_id)
     if not product or not product.active:
         raise HTTPException(status_code=404, detail="Product not found")
@@ -27,7 +31,7 @@ def list_for_product(product_id: str = Path(...), db: Session = Depends(get_db))
     dependencies=[Depends(get_current_admin)],
 )
 def create(
-    product_id: str = Path(...),
+    product_id: UUID = Path(..., description="UUID del producto"),
     payload: VariantCreate = ...,
     db: Session = Depends(get_db),
 ):
@@ -44,7 +48,7 @@ def create(
     dependencies=[Depends(get_current_admin)],
 )
 def update(
-    variant_id: str = Path(...),
+    variant_id: UUID = Path(..., description="UUID de la variante"),
     payload: VariantUpdate = ...,
     db: Session = Depends(get_db),
 ):
@@ -60,7 +64,10 @@ def update(
     status_code=status.HTTP_204_NO_CONTENT,
     dependencies=[Depends(get_current_admin)],
 )
-def delete(variant_id: str = Path(...), db: Session = Depends(get_db)):
+def delete(
+    variant_id: UUID = Path(..., description="UUID de la variante"),
+    db: Session = Depends(get_db),
+):
     variant = db.get(ProductVariant, variant_id)
     if not variant:
         raise HTTPException(status_code=404, detail="Variant not found")

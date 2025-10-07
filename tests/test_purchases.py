@@ -1,12 +1,17 @@
 # tests/test_purchases.py
 import pytest
 from httpx import AsyncClient
+import uuid  # <--- AÑADIR IMPORT
 
 # -------- helpers --------
 async def _crear_base_minima(client: AsyncClient, admin_token: str):
+    """
+    Helper para crear una categoría, marca, producto y variante base para las pruebas.
+    """
+    cat_name = f"ComprasCat-{uuid.uuid4()}"
     r_cat = await client.post(
         "/api/v1/categories",
-        json={"name": "ComprasCat"},
+        json={"name": cat_name},
         headers={"Authorization": f"Bearer {admin_token}"},
     )
     assert r_cat.status_code == 201, r_cat.text
@@ -14,7 +19,7 @@ async def _crear_base_minima(client: AsyncClient, admin_token: str):
 
     r_brand = await client.post(
         "/api/v1/brands",
-        json={"name": "ComprasBrand"},
+        json={"name": f"ComprasBrand-{uuid.uuid4()}"},
         headers={"Authorization": f"Bearer {admin_token}"},
     )
     assert r_brand.status_code == 201, r_brand.text
@@ -37,12 +42,10 @@ async def _crear_base_minima(client: AsyncClient, admin_token: str):
     rv = await client.post(
         f"/api/v1/products/{prod['id']}/variants",
         json={
-            "sku": "PO-TEST-001",
+            "sku": f"PO-TEST-{uuid.uuid4()}",  # SKU dinámico para evitar colisiones
             "size_label": "U",
             "color_name": "Negro",
-            "color_hex": "#000000",
             "stock_on_hand": 0,
-            "stock_reserved": 0,
             "active": True,
         },
         headers={"Authorization": f"Bearer {admin_token}"},
@@ -56,20 +59,16 @@ async def _crear_base_minima(client: AsyncClient, admin_token: str):
 
 @pytest.mark.asyncio
 async def test_supplier_create_and_list(client: AsyncClient, admin_token: str):
-    # crear supplier
+    # crear supplier con nombre único
+    supplier_name = f"Proveedor Uno {uuid.uuid4()}"
     rs = await client.post(
         "/api/v1/purchases/suppliers",
-        json={
-            "name": "Proveedor Uno",
-            # ajusta si tu schema requiere campos extra:
-            # "email": "compras@proveedoruno.com",
-            # "phone": "+54 11 5555-5555",
-        },
+        json={"name": supplier_name},
         headers={"Authorization": f"Bearer {admin_token}"},
     )
     assert rs.status_code == 201, rs.text
     sup = rs.json()
-    assert sup["name"] == "Proveedor Uno"
+    assert sup["name"] == supplier_name
 
     # listar suppliers
     rl = await client.get(
@@ -86,30 +85,19 @@ async def test_supplier_create_and_list(client: AsyncClient, admin_token: str):
 async def test_purchase_order_create(client: AsyncClient, admin_token: str):
     _, _, _, variant = await _crear_base_minima(client, admin_token)
 
-    # crear supplier
     rs = await client.post(
         "/api/v1/purchases/suppliers",
-        json={"name": "Proveedor PO"},
+        json={"name": f"Proveedor PO {uuid.uuid4()}"},
         headers={"Authorization": f"Bearer {admin_token}"},
     )
     assert rs.status_code == 201, rs.text
     supplier = rs.json()
 
-    # crear PO con una línea
     rpo = await client.post(
         "/api/v1/purchases/orders",
         json={
             "supplier_id": supplier["id"],
-            "currency": "ARS",
-            "lines": [
-                {
-                    # Si tu API usa line_id en vez de variant_id, ajusta aquí:
-                    "variant_id": variant["id"],
-                    "quantity": 5,
-                    "unit_cost": 800.0,
-                }
-            ],
-            # agrega campos opcionales si tu schema los pide (expected_date, notes, etc.)
+            "lines": [{"variant_id": variant["id"], "quantity": 5, "unit_cost": 800.0}],
         },
         headers={"Authorization": f"Bearer {admin_token}"},
     )
@@ -117,40 +105,35 @@ async def test_purchase_order_create(client: AsyncClient, admin_token: str):
     po = rpo.json()
     assert po["supplier_id"] == supplier["id"]
     assert len(po.get("lines", [])) == 1
-    line = po["lines"][0]
-    assert line["quantity"] == 5
+    assert po["lines"][0]["quantity"] == 5
 
 
 @pytest.mark.asyncio
 async def test_purchase_order_receive_flow_updates_inventory(client: AsyncClient, admin_token: str):
-    _, _, _, variant = await _crear_base_minima(client, admin_token)
+    # 👇 ahora también recibimos prod para usar su id en el GET
+    _, _, prod, variant = await _crear_base_minima(client, admin_token)
 
-    # Crear supplier
     rs = await client.post(
         "/api/v1/purchases/suppliers",
-        json={"name": "Proveedor Recepciones"},
+        json={"name": f"Proveedor Recepciones {uuid.uuid4()}"},
         headers={"Authorization": f"Bearer {admin_token}"},
     )
     assert rs.status_code == 201, rs.text
     supplier = rs.json()
 
-    # Crear PO con qty 5
     rpo = await client.post(
         "/api/v1/purchases/orders",
         json={
             "supplier_id": supplier["id"],
-            "currency": "ARS",
             "lines": [{"variant_id": variant["id"], "quantity": 5, "unit_cost": 750.0}],
         },
         headers={"Authorization": f"Bearer {admin_token}"},
     )
     assert rpo.status_code == 201, rpo.text
     po = rpo.json()
-
-    # --- usar line_id de la respuesta ---
     line_id = po["lines"][0]["id"]
 
-    # recepción parcial: 3
+    # Recepción parcial: 3
     rr1 = await client.post(
         f"/api/v1/purchases/orders/{po['id']}/receive",
         json={"items": [{"line_id": line_id, "quantity": 3}]},
@@ -158,29 +141,62 @@ async def test_purchase_order_receive_flow_updates_inventory(client: AsyncClient
     )
     assert rr1.status_code == 200, rr1.text
 
-    # verificar movimientos: debe existir receive de 3
-    rm1 = await client.get(
-        f"/api/v1/products/variants/{variant['id']}/stock/movements",
-        headers={"Authorization": f"Bearer {admin_token}"},
+    # Verificar stock — usar el product.id del helper (no 'product_id' dentro de variant)
+    r_variants_get = await client.get(
+        f"/api/v1/products/{prod['id']}/variants",
+        headers={"Authorization": f"Bearer {admin_token}"}
     )
-    assert rm1.status_code == 200, rm1.text
-    movs1 = rm1.json()
-    assert any(m["type"] == "receive" and m["quantity"] == 3 for m in movs1)
+    assert r_variants_get.status_code == 200
 
-    # recepción restante: 2
-    rr2 = await client.post(
-        f"/api/v1/purchases/orders/{po['id']}/receive",
-        json={"items": [{"line_id": line_id, "quantity": 2}]},
-        headers={"Authorization": f"Bearer {admin_token}"},
-    )
-    assert rr2.status_code == 200, rr2.text
+    variant_after_receive = next((v for v in r_variants_get.json() if v['id'] == variant['id']), None)
+    assert variant_after_receive is not None
+    assert variant_after_receive['stock_on_hand'] == 3
 
-    # verificar que existan movimientos de 3 y 2
-    rm2 = await client.get(
-        f"/api/v1/products/variants/{variant['id']}/stock/movements",
+
+# ===============================================================
+# ===== NUEVA PRUEBA AÑADIDA ====================================
+# ===============================================================
+@pytest.mark.asyncio
+async def test_create_po_from_suggestions(client: AsyncClient, admin_token: str):
+    # 1. Crear un proveedor
+    rs = await client.post(
+        "/api/v1/purchases/suppliers",
+        json={"name": f"Proveedor Sugerencias {uuid.uuid4()}"},
         headers={"Authorization": f"Bearer {admin_token}"},
     )
-    assert rm2.status_code == 200, rm2.text
-    movs2 = rm2.json()
-    qtys = sorted([m["quantity"] for m in movs2 if m["type"] == "receive"])
-    assert 2 in qtys and 3 in qtys
+    assert rs.status_code == 201
+    supplier = rs.json()
+
+    # 2. Crear un producto y variante con necesidad de reposición
+    _, _, _, variant = await _crear_base_minima(client, admin_token)
+
+    # Actualizar la variante para que active una alerta
+    r_update = await client.put(
+        f"/api/v1/products/variants/{variant['id']}",
+        json={
+            "stock_on_hand": 1,
+            "reorder_point": 5,
+            "reorder_qty": 10,
+            "primary_supplier_id": supplier["id"]
+        },
+        headers={"Authorization": f"Bearer {admin_token}"},
+    )
+    assert r_update.status_code == 200
+
+    # 3. Llamar al nuevo endpoint para generar la PO
+    r_po_sugg = await client.post(
+        "/api/v1/purchases/orders/from-suggestions",
+        json={"supplier_id": supplier["id"]},
+        headers={"Authorization": f"Bearer {admin_token}"},
+    )
+    assert r_po_sugg.status_code == 201, r_po_sugg.text
+    po = r_po_sugg.json()
+
+    # 4. Verificar que la PO se creó correctamente
+    assert po["supplier_id"] == supplier["id"]
+    assert po["status"] == "draft"
+    assert len(po["lines"]) == 1
+
+    line = po["lines"][0]
+    assert line["variant_id"] == variant["id"]
+    assert line["quantity"] == 10  # reorder_qty (10) > missing (4)

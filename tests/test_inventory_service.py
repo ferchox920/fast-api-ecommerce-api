@@ -6,10 +6,20 @@ from app.db.session import SessionLocal
 from app.models.product import Category, Brand, Product, ProductVariant
 from app.services import inventory_service
 from fastapi import HTTPException
-from app.models.supplier import Supplier    
+from app.models.supplier import Supplier
+
+
 # ---------- helpers ----------
 
-def _mk_variant(db: Session, *, on_hand=0, reserved=0, reorder_point=0, reorder_qty=0, primary_supplier_id=None) -> ProductVariant:
+def _mk_variant(
+    db: Session,
+    *,
+    on_hand=0,
+    reserved=0,
+    reorder_point=0,
+    reorder_qty=0,
+    primary_supplier_id=None,
+) -> ProductVariant:
     cat = Category(name=f"Cat-{uuid.uuid4()}", slug=f"cat-{uuid.uuid4()}")
     brand = Brand(name=f"Brand-{uuid.uuid4()}", slug=f"brand-{uuid.uuid4()}")
     db.add_all([cat, brand])
@@ -44,6 +54,7 @@ def _mk_variant(db: Session, *, on_hand=0, reserved=0, reorder_point=0, reorder_
     db.refresh(v)
     return v
 
+
 # ---------- tests ----------
 
 def test_receive_and_list_movements():
@@ -63,6 +74,7 @@ def test_receive_and_list_movements():
         assert last["reason"] == "ingreso OC"
     finally:
         db.close()
+
 
 def test_adjust_positive_and_negative_guards():
     db = SessionLocal()
@@ -85,6 +97,7 @@ def test_adjust_positive_and_negative_guards():
         assert "No puede quedar negativo" in exc.value.detail
     finally:
         db.close()
+
 
 def test_reserve_and_release_validation():
     db = SessionLocal()
@@ -115,6 +128,7 @@ def test_reserve_and_release_validation():
     finally:
         db.close()
 
+
 def test_commit_sale_from_reserved_and_onhand():
     db = SessionLocal()
     try:
@@ -138,6 +152,7 @@ def test_commit_sale_from_reserved_and_onhand():
     finally:
         db.close()
 
+
 def test_alerts_and_replenishment_suggestion_without_supplier():
     db = SessionLocal()
     try:
@@ -160,13 +175,15 @@ def test_alerts_and_replenishment_suggestion_without_supplier():
     finally:
         db.close()
 
+
 def test_alerts_and_replenishment_filtered_by_supplier():
     db = SessionLocal()
     try:
         supplier_id = uuid.uuid4()
 
         # crear fila en suppliers para respetar el FK
-        db.add(Supplier(id=supplier_id, name="Test Supplier"))
+        unique_name = f"Test Supplier {uuid.uuid4()}"  # evitar UniqueViolation en ix_suppliers_name
+        db.add(Supplier(id=supplier_id, name=unique_name))
         db.commit()
 
         v1 = _mk_variant(
@@ -199,6 +216,7 @@ def test_alerts_and_replenishment_filtered_by_supplier():
         assert v2.id not in line_ids
     finally:
         db.close()
+
 
 def test_invalid_quantities_raise_400():
     db = SessionLocal()

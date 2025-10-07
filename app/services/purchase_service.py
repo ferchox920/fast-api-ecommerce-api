@@ -8,6 +8,7 @@ from app.models.supplier import Supplier
 from app.models.purchase import PurchaseOrder, PurchaseOrderLine, POStatus
 from app.models.product import ProductVariant
 from app.schemas.supplier import SupplierCreate, SupplierUpdate
+from app.services import inventory_service
 from app.schemas.purchase import POCreate, POLineCreate, POReceivePayload  # <-- tus schemas reales
 from sqlalchemy import func, select
 from app.services import product_service
@@ -123,3 +124,46 @@ def receive_po(db: Session, po: PurchaseOrder, payload: POReceivePayload) -> Pur
 
 def get_po(db: Session, po_id: str) -> PurchaseOrder | None:
     return db.get(PurchaseOrder, _as_uuid(po_id, "po_id"))
+
+def create_po_from_suggestions(db: Session, supplier_id: str) -> PurchaseOrder:
+    """
+    Crea una nueva Orden de Compra en estado 'draft' a partir de las
+    sugerencias de reposición para un proveedor específico.
+    """
+    supplier = get_supplier(db, supplier_id)
+    if not supplier:
+        raise HTTPException(status_code=404, detail="Supplier not found")
+
+    # 1. Obtener sugerencias de reposición
+    suggestions = inventory_service.compute_replenishment_suggestion(db, supplier_id=supplier.id)
+    if not suggestions.lines:
+        raise HTTPException(status_code=400, detail="No replenishment suggestions found for this supplier")
+
+    # 2. Crear la cabecera de la Orden de Compra
+    po = PurchaseOrder(
+        supplier_id=supplier.id,
+        currency="ARS",  # o la moneda por defecto que prefieras
+        status=POStatus.draft,
+    )
+    db.add(po)
+    db.flush()  # Para obtener el po.id antes de crear las líneas
+
+    # 3. Crear las líneas de la orden a partir de las sugerencias
+    for line_sugg in suggestions.lines:
+        variant = db.get(ProductVariant, line_sugg.variant_id)
+        if not variant:
+            # Raro que ocurra, pero es una buena validación
+            continue
+
+        line_po = PurchaseOrderLine(
+            po_id=po.id,
+            variant_id=variant.id,
+            qty_ordered=line_sugg.suggested_qty,
+            # Usamos el último costo o un default de 0 si no existe
+            unit_cost=line_sugg.last_unit_cost or 0.0,
+        )
+        db.add(line_po)
+
+    db.commit()
+    db.refresh(po)
+    return po

@@ -1,4 +1,4 @@
-# app/api/routers/products.py
+from uuid import UUID
 from math import ceil
 from typing import List
 
@@ -82,11 +82,11 @@ def admin_create(payload: ProductCreate, db: Session = Depends(get_db)):
     dependencies=[Depends(get_current_admin)],
 )
 def admin_update(
-    product_id: str = Path(...),
+    product_id: UUID = Path(..., description="UUID del producto"),
     payload: ProductUpdate = ...,
     db: Session = Depends(get_db),
 ):
-    prod = product_service.get_product_by_id(db, product_id)
+    prod = product_service.get_product_by_id(db, str(product_id))
     if not prod:
         raise HTTPException(status_code=404, detail="Product not found")
     return product_service.update_product(db, prod, payload)
@@ -100,12 +100,14 @@ def admin_update(
     dependencies=[Depends(get_current_admin)],
 )
 def admin_add_variant(
-    product_id: str, payload: ProductVariantCreate, db: Session = Depends(get_db)
+    product_id: UUID = Path(..., description="UUID del producto"),
+    payload: ProductVariantCreate = ...,
+    db: Session = Depends(get_db),
 ):
-    prod = product_service.get_product_by_id(db, product_id)
+    prod = product_service.get_product_by_id(db, str(product_id))
     if not prod:
         raise HTTPException(status_code=404, detail="Product not found")
-    return product_service.add_variant(db, product_id, payload)
+    return product_service.add_variant(db, str(product_id), payload)
 
 
 @router.put(
@@ -114,9 +116,11 @@ def admin_add_variant(
     dependencies=[Depends(get_current_admin)],
 )
 def admin_update_variant(
-    variant_id: str, payload: ProductVariantUpdate, db: Session = Depends(get_db)
+    variant_id: UUID = Path(..., description="UUID de la variante"),
+    payload: ProductVariantUpdate = ...,
+    db: Session = Depends(get_db),
 ):
-    var = product_service.get_variant(db, variant_id)
+    var = product_service.get_variant(db, str(variant_id))
     if not var:
         raise HTTPException(status_code=404, detail="Variant not found")
     return product_service.update_variant(db, var, payload)
@@ -127,8 +131,11 @@ def admin_update_variant(
     status_code=status.HTTP_204_NO_CONTENT,
     dependencies=[Depends(get_current_admin)],
 )
-def admin_delete_variant(variant_id: str, db: Session = Depends(get_db)):
-    var = product_service.get_variant(db, variant_id)
+def admin_delete_variant(
+    variant_id: UUID = Path(..., description="UUID de la variante"),
+    db: Session = Depends(get_db),
+):
+    var = product_service.get_variant(db, str(variant_id))
     if not var:
         raise HTTPException(status_code=404, detail="Variant not found")
     product_service.delete_variant(db, var)
@@ -142,12 +149,12 @@ def admin_delete_variant(variant_id: str, db: Session = Depends(get_db)):
     dependencies=[Depends(get_current_admin)],
 )
 def admin_set_stock(
-    variant_id: str,
+    variant_id: UUID = Path(..., description="UUID de la variante"),
     on_hand: int | None = Query(None, ge=0),
     reserved: int | None = Query(None, ge=0),
     db: Session = Depends(get_db),
 ):
-    var = product_service.get_variant(db, variant_id)
+    var = product_service.get_variant(db, str(variant_id))
     if not var:
         raise HTTPException(status_code=404, detail="Variant not found")
     return product_service.set_stock(db, var, on_hand, reserved)
@@ -161,12 +168,14 @@ def admin_set_stock(
     dependencies=[Depends(get_current_admin)],
 )
 def admin_add_image(
-    product_id: str, payload: ProductImageCreate, db: Session = Depends(get_db)
+    product_id: UUID = Path(..., description="UUID del producto"),
+    payload: ProductImageCreate = ...,
+    db: Session = Depends(get_db),
 ):
-    prod = product_service.get_product_by_id(db, product_id)
+    prod = product_service.get_product_by_id(db, str(product_id))
     if not prod:
         raise HTTPException(status_code=404, detail="Product not found")
-    return product_service.add_image(db, product_id, payload)
+    return product_service.add_image(db, str(product_id), payload)
 
 
 @router.post(
@@ -175,12 +184,14 @@ def admin_add_image(
     dependencies=[Depends(get_current_admin)],
 )
 def admin_set_primary_image(
-    product_id: str, image_id: str, db: Session = Depends(get_db)
+    product_id: UUID = Path(..., description="UUID del producto"),
+    image_id: UUID = Path(..., description="UUID de la imagen"),
+    db: Session = Depends(get_db),
 ):
-    prod = product_service.get_product_by_id(db, product_id)
+    prod = product_service.get_product_by_id(db, str(product_id))
     if not prod:
         raise HTTPException(status_code=404, detail="Product not found")
-    return product_service.set_primary_image(db, prod, image_id)
+    return product_service.set_primary_image(db, prod, str(image_id))
 
 
 # ---------- Admin: Movimientos de Inventario ----------
@@ -190,9 +201,11 @@ def admin_set_primary_image(
     dependencies=[Depends(get_current_admin)],
 )
 def admin_receive_stock(
-    variant_id: str, payload: MovementCreate, db: Session = Depends(get_db)
+    variant_id: UUID = Path(..., description="UUID de la variante"),
+    payload: MovementCreate = ...,
+    db: Session = Depends(get_db),
 ):
-    var = product_service.get_variant(db, variant_id)
+    var = product_service.get_variant(db, str(variant_id))
     if not var:
         raise HTTPException(status_code=404, detail="Variant not found")
     if payload.type != "receive":
@@ -206,9 +219,11 @@ def admin_receive_stock(
     dependencies=[Depends(get_current_admin)],
 )
 def admin_reserve_stock(
-    variant_id: str, payload: MovementCreate, db: Session = Depends(get_db)
+    variant_id: UUID = Path(..., description="UUID de la variante"),
+    payload: MovementCreate = ...,
+    db: Session = Depends(get_db),
 ):
-    var = product_service.get_variant(db, variant_id)
+    var = product_service.get_variant(db, str(variant_id))
     if not var:
         raise HTTPException(status_code=404, detail="Variant not found")
     if payload.type != "reserve":
@@ -222,9 +237,11 @@ def admin_reserve_stock(
     dependencies=[Depends(get_current_admin)],
 )
 def admin_release_stock(
-    variant_id: str, payload: MovementCreate, db: Session = Depends(get_db)
+    variant_id: UUID = Path(..., description="UUID de la variante"),
+    payload: MovementCreate = ...,
+    db: Session = Depends(get_db),
 ):
-    var = product_service.get_variant(db, variant_id)
+    var = product_service.get_variant(db, str(variant_id))
     if not var:
         raise HTTPException(status_code=404, detail="Variant not found")
     if payload.type != "release":
@@ -238,9 +255,11 @@ def admin_release_stock(
     dependencies=[Depends(get_current_admin)],
 )
 def admin_commit_sale(
-    variant_id: str, payload: MovementCreate, db: Session = Depends(get_db)
+    variant_id: UUID = Path(..., description="UUID de la variante"),
+    payload: MovementCreate = ...,
+    db: Session = Depends(get_db),
 ):
-    var = product_service.get_variant(db, variant_id)
+    var = product_service.get_variant(db, str(variant_id))
     if not var:
         raise HTTPException(status_code=404, detail="Variant not found")
     if payload.type != "sale":
@@ -254,12 +273,12 @@ def admin_commit_sale(
     dependencies=[Depends(get_current_admin)],
 )
 def admin_adjust_stock(
-    variant_id: str,
+    variant_id: UUID = Path(..., description="UUID de la variante"),
     delta: int = Query(...),  # puede ser negativo o positivo
     reason: str | None = Query(None),
     db: Session = Depends(get_db),
 ):
-    var = product_service.get_variant(db, variant_id)
+    var = product_service.get_variant(db, str(variant_id))
     if not var:
         raise HTTPException(status_code=404, detail="Variant not found")
     return product_service.adjust_stock(db, var, delta, reason)
@@ -271,12 +290,12 @@ def admin_adjust_stock(
     dependencies=[Depends(get_current_admin)],
 )
 def admin_list_movements(
-    variant_id: str,
+    variant_id: UUID = Path(..., description="UUID de la variante"),
     limit: int = Query(50, ge=1, le=200),
     offset: int = Query(0, ge=0),
     db: Session = Depends(get_db),
 ):
-    var = product_service.get_variant(db, variant_id)
+    var = product_service.get_variant(db, str(variant_id))
     if not var:
         raise HTTPException(status_code=404, detail="Variant not found")
     return product_service.list_movements(db, var, limit, offset)
@@ -287,8 +306,11 @@ def admin_list_movements(
     response_model=dict,  # {"score": int, "issues": list[str]}
     dependencies=[Depends(get_current_admin)],
 )
-def admin_product_quality(product_id: str, db: Session = Depends(get_db)):
-    prod = product_service.get_product_by_id(db, product_id)
+def admin_product_quality(
+    product_id: UUID = Path(..., description="UUID del producto"),
+    db: Session = Depends(get_db),
+):
+    prod = product_service.get_product_by_id(db, str(product_id))
     if not prod:
         raise HTTPException(status_code=404, detail="Product not found")
     return product_service.compute_product_quality(db, prod)

@@ -1,20 +1,23 @@
+# app/api/routers/purchases.py
 from fastapi import APIRouter, Depends, HTTPException, status, Query
 from sqlalchemy.orm import Session
 from typing import Optional
 from uuid import UUID
+from pydantic import BaseModel
 
 from app.db.session import get_db
 from app.api.deps import get_current_admin
-from app.schemas.supplier import SupplierCreate, SupplierRead, SupplierUpdate
-
-from app.schemas.purchase import (
-    POCreate, PORead, POLineCreate, POReceivePayload
-)
+from app.schemas.supplier import SupplierCreate, SupplierRead
+from app.schemas.purchase import POCreate, PORead, POLineCreate, POReceivePayload
 from app.services import purchase_service
 
-# NUEVO: schemas/servicio de reposición
+# Schemas/servicios de reposición
 from app.schemas.inventory_replenishment import ReplenishmentSuggestion, StockAlert
 from app.services import inventory_service
+
+# Schema para el payload del nuevo endpoint
+class POCreateFromSuggestionPayload(BaseModel):
+    supplier_id: UUID
 
 router = APIRouter(prefix="/purchases", tags=["purchases"])
 
@@ -40,8 +43,6 @@ def list_suppliers(
     db: Session = Depends(get_db),
 ):
     return purchase_service.list_suppliers(db, q, limit, offset)
-
-# (Si más adelante agregas SupplierUpdate, aquí puedes reponer el endpoint de update)
 
 # ---------- Purchase Orders ----------
 @router.post(
@@ -106,9 +107,28 @@ def cancel_po(po_id: str, db: Session = Depends(get_db)):
     po = purchase_service.get_po(db, po_id)
     if not po:
         raise HTTPException(404, "PO not found")
+    # Asumiendo que tienes una función `cancel_po` en tu servicio
     return purchase_service.cancel_po(db, po)
 
-# ---------- Replenishment (NUEVO) ----------
+@router.post(
+    "/orders/from-suggestions",
+    response_model=PORead,
+    status_code=status.HTTP_201_CREATED,
+    dependencies=[Depends(get_current_admin)],
+    summary="Create PO from replenishment suggestions"
+)
+def create_po_from_suggestions_endpoint( # Renombrado para evitar conflicto
+    payload: POCreateFromSuggestionPayload,
+    db: Session = Depends(get_db)
+):
+    """
+    Genera automáticamente una orden de compra (en borrador) para un proveedor,
+    basándose en las alertas de stock bajo (available <= reorder_point).
+    """
+    return purchase_service.create_po_from_suggestions(db, str(payload.supplier_id))
+
+
+# ---------- Replenishment ----------
 @router.get(
     "/replenishment/alerts",
     response_model=list[StockAlert],

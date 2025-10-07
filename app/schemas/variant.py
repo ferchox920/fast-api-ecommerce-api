@@ -1,6 +1,7 @@
-# app/schemas/variant.py
+from uuid import UUID
 from pydantic import BaseModel, Field, field_validator, ConfigDict
 from typing import Optional
+
 
 class VariantBase(BaseModel):
     sku: str = Field(..., min_length=2, max_length=64)
@@ -58,8 +59,6 @@ class VariantUpdate(BaseModel):
 
 
 class VariantRead(VariantBase):
-    id: str
-    product_id: str
-
-    # Pydantic v2: reemplaza class Config
+    id: UUID
+    product_id: UUID
     model_config = ConfigDict(from_attributes=True)
