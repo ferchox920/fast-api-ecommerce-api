@@ -4,38 +4,48 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.openapi.utils import get_openapi
 
 from app.core.config import settings
+from app.api.routers import (
+    admin,
+    auth,
+    brands,
+    categories,
+    products,
+    purchases,
+    reports,
+    users,
+    variants,
+)
 
-# --- Models registration (efecto lateral: registra tablas en Base.metadata) ---
+# --- Models registration (necesario para que Alembic los detecte) ---
 import app.models.product        # noqa: F401
 import app.models.inventory      # noqa: F401
-import app.models.supplier       # noqa: F401  # <-- nuevo
-import app.models.purchase       # noqa: F401  # <-- nuevo
+import app.models.supplier       # noqa: F401
+import app.models.purchase       # noqa: F401
 
-from app.api.routers import auth, users, admin, products, categories, brands, variants
-from app.api.routers import purchases  # <-- nuevo
-
-# --- Metadatos / tags ---
+# --- Metadatos de la API para la documentación ---
 TAGS_METADATA = [
-    {"name": "auth", "description": "Login local, refresh tokens, verificación por email y OAuth (upsert)."},
-    {"name": "users", "description": "Registro, lectura y actualización del perfil."},
-    {"name": "admin", "description": "Gestión de usuarios (solo admins)."},
-    {"name": "products", "description": "Catálogo público y gestión de productos/variantes (solo admins para escribir)."},
-    {"name": "categories", "description": "Listado público y CRUD de categorías (admin)."},
-    {"name": "brands", "description": "Listado público y CRUD de marcas (admin)."},
-    {"name": "variants", "description": "Gestión de variantes (SKU, stock, color, talle)."},
-    {"name": "purchases", "description": "Proveedores y órdenes de compra; recepción integra con inventario."},  # <-- nuevo
+    {"name": "auth", "description": "Autenticación, tokens y gestión de sesiones."},
+    {"name": "users", "description": "Operaciones del perfil de usuario."},
+    {"name": "admin", "description": "Operaciones de administración de usuarios."},
+    {"name": "products", "description": "Gestión y consulta del catálogo de productos."},
+    {"name": "categories", "description": "Gestión de categorías de productos."},
+    {"name": "brands", "description": "Gestión de marcas."},
+    {"name": "variants", "description": "Gestión de variantes de productos (SKU, stock, etc.)."},
+    {"name": "purchases", "description": "Gestión de proveedores y órdenes de compra."},
+    {"name": "reports", "description": "Métricas y reportes de negocio."},
 ]
 
 app = FastAPI(
     title=settings.PROJECT_NAME,
     version="0.1.0",
     description=(
-        "API de E-Commerce.\n\n"
-        "- **Auth**: OAuth2 Password, JWT (access/refresh), verificación por email.\n"
-        "- **Users**: perfil y dirección.\n"
-        "- **Products**: catálogo con variantes (talle/color), imágenes y filtros.\n"
-        "- **Purchases**: proveedores y órdenes de compra con recepción contra inventario.\n\n"
-        "Usá **Authorize** (Bearer) para probar endpoints protegidos."
+        "API de E-Commerce modular y escalable.\n\n"
+        "- **Auth**: Login, refresh tokens y verificación de email.\n"
+        "- **Users**: Gestión de perfiles de usuario.\n"
+        "- **Products**: Catálogo completo con variantes, imágenes y filtros.\n"
+        "- **Purchases**: Ciclo de abastecimiento con proveedores y órdenes de compra.\n"
+        "- **Reports**: Métricas de negocio basadas en el historial de ventas.\n\n"
+        "Usa el botón **Authorize** para probar los endpoints protegidos."
     ),
     openapi_tags=TAGS_METADATA,
     docs_url="/docs",
@@ -48,26 +58,28 @@ app = FastAPI(
     },
 )
 
-# --- CORS ---
+# --- Middlewares ---
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],      # ajusta en prod
+    allow_origins=["*"],  # Ajustar en producción para mayor seguridad
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
 # --- Routers ---
-app.include_router(auth.router,      prefix=settings.API_V1_STR)
-app.include_router(users.router,     prefix=settings.API_V1_STR)
-app.include_router(admin.router,     prefix=settings.API_V1_STR)
-app.include_router(products.router,  prefix=settings.API_V1_STR)
+app.include_router(auth.router, prefix=settings.API_V1_STR)
+app.include_router(users.router, prefix=settings.API_V1_STR)
+app.include_router(admin.router, prefix=settings.API_V1_STR)
 app.include_router(categories.router, prefix=settings.API_V1_STR)
-app.include_router(brands.router,    prefix=settings.API_V1_STR)
-app.include_router(variants.router,  prefix=settings.API_V1_STR)
-app.include_router(purchases.router, prefix=settings.API_V1_STR)  # <-- nuevo
+app.include_router(brands.router, prefix=settings.API_V1_STR)
+app.include_router(products.router, prefix=settings.API_V1_STR)
+app.include_router(variants.router, prefix=settings.API_V1_STR)
+app.include_router(purchases.router, prefix=settings.API_V1_STR)
+app.include_router(reports.router, prefix=settings.API_V1_STR)
 
-# --- OpenAPI con securitySchemes (Bearer + OAuth2 Password) ---
+
+# --- Configuración personalizada de OpenAPI ---
 def custom_openapi():
     if app.openapi_schema:
         return app.openapi_schema
@@ -80,22 +92,19 @@ def custom_openapi():
         tags=TAGS_METADATA,
     )
 
-    comps = openapi_schema.setdefault("components", {}).setdefault("securitySchemes", {})
+    openapi_schema["info"]["x-logo"] = {
+        "url": "https://fastapi.tiangolo.com/img/logo-margin/logo-teal.png"
+    }
 
+    comps = openapi_schema.setdefault("components", {}).setdefault("securitySchemes", {})
     comps["BearerAuth"] = {
         "type": "http",
         "scheme": "bearer",
         "bearerFormat": "JWT",
-        "description": "Pega tu access token. Formato: `Bearer <token>`",
+        "description": "Pega tu access token aquí. Formato: `Bearer <token>`",
     }
-
-    comps["OAuth2Password"] = {
-        "type": "oauth2",
-        "flows": {"password": {"tokenUrl": f"{settings.API_V1_STR}/auth/login", "scopes": {}}},
-        "description": "OAuth2 Password Flow contra `/auth/login`.",
-    }
-
-    # Solo documentación; la protección real la hacen tus Depends.
+    
+    # Define que los endpoints usarán BearerAuth por defecto
     openapi_schema["security"] = [{"BearerAuth": []}]
 
     app.openapi_schema = openapi_schema
@@ -103,7 +112,7 @@ def custom_openapi():
 
 app.openapi = custom_openapi
 
-# --- Root amigable ---
+# --- Endpoint raíz ---
 @app.get("/", include_in_schema=False)
 def root():
-    return {"status": "ok", "docs": "/docs", "redoc": "/redoc"}
+    return {"status": "ok", "docs_url": "/docs", "redoc_url": "/redoc"}
