@@ -12,9 +12,12 @@ from app.schemas.user import TokenPayload
 oauth2_scheme = OAuth2PasswordBearer(
     tokenUrl=f"{settings.API_V1_STR}/auth/login",
     scopes={
-        "admin": "Acceso de administrador",
-        "products:write": "Permisos de escritura para productos",
-        "purchases:write": "Permisos de escritura para compras",
+        "admin": "Acceso total de administrador.",
+        "users:me": "Acceso al perfil del propio usuario.",
+        "products:read": "Permiso para leer productos.",
+        "products:write": "Permiso para crear, actualizar y eliminar productos.",
+        "purchases:read": "Permiso para leer órdenes de compra.",
+        "purchases:write": "Permiso para crear y gestionar órdenes de compra.",
     },
 )
 
@@ -30,7 +33,7 @@ def get_current_user(
     )
     try:
         payload = jwt.decode(token, settings.SECRET_KEY, algorithms=[ALGORITHM])
-        token_data = TokenPayload(**payload)  # ← soporta scopes opcionales
+        token_data = TokenPayload(**payload)
         token_scopes: list[str] = payload.get("scopes", []) or []
     except JWTError:
         raise cred_exc
@@ -42,7 +45,6 @@ def get_current_user(
     if user is None:
         raise cred_exc
 
-    # Si el endpoint requiere scopes, verificarlos (a menos que sea admin total)
     if security_scopes.scopes:
         if "admin" not in token_scopes:
             for scope in security_scopes.scopes:
@@ -69,6 +71,5 @@ def get_current_admin(
     if not current_user.is_active:
         raise HTTPException(status_code=400, detail="Inactive user")
     if not current_user.is_superuser:
-        # por si el token trae "admin" sin que el usuario lo sea
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Admin only")
     return current_user

@@ -2,6 +2,7 @@
 import sys
 from pathlib import Path
 
+# --- Configuración del Path (sin cambios) ---
 ROOT_DIR = Path(__file__).resolve().parents[1]
 if str(ROOT_DIR) not in sys.path:
     sys.path.insert(0, str(ROOT_DIR))
@@ -10,7 +11,8 @@ import pytest
 import pytest_asyncio
 import httpx
 from sqlalchemy import create_engine
-from sqlalchemy.orm import sessionmaker
+from sqlalchemy.orm import sessionmaker, Session
+from typing import Generator
 
 from app.main import app
 from app.db.session import Base, get_db
@@ -25,46 +27,50 @@ TestingSessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=sync_
 # ---------- Fixtures ----------
 @pytest.fixture(scope="session", autouse=True)
 def setup_database():
-    """Crea las tablas en SQLite antes de los tests."""
-    # 🔑 Registrar modelos por efecto lateral ANTES de crear el esquema
-    import app.models.product    # noqa: F401
-    import app.models.inventory  # noqa: F401
-
+    """Crea las tablas en SQLite solo una vez por sesión de tests."""
+    import app.models.product
+    import app.models.inventory
+    import app.models.supplier
+    import app.models.purchase
+    
     Base.metadata.create_all(bind=sync_engine)
     yield
     Base.metadata.drop_all(bind=sync_engine)
 
-@pytest.fixture()
-def db_session():
-    """Provee una sesión de DB aislada por test (rollback automático)."""
+@pytest.fixture(scope="function")
+def db_session() -> Generator[Session, any, None]:
+    """
+    Provee una sesión de DB aislada por test, envuelta en una transacción
+    que se revierte al final del test.
+    """
     connection = sync_engine.connect()
     transaction = connection.begin()
     session = TestingSessionLocal(bind=connection)
     try:
         yield session
     finally:
+        session.close()
         if transaction.is_active:
             transaction.rollback()
-        session.close()
         connection.close()
 
-@pytest_asyncio.fixture()
-async def client(db_session):
-    """Provee un AsyncClient con DB inyectada."""
+@pytest_asyncio.fixture(scope="function")
+async def client(db_session: Session):
+    """Provee un AsyncClient con la sesión transaccional inyectada."""
     def override_get_db():
         yield db_session
 
     app.dependency_overrides[get_db] = override_get_db
-
-    async with httpx.AsyncClient(
-        transport=httpx.ASGITransport(app=app),
-        base_url="http://test",
-    ) as ac:
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as ac:
         yield ac
+    app.dependency_overrides.clear()
 
-@pytest.fixture()
-def admin_user(db_session):
-    """Crea un usuario admin para tests."""
+
+# --- Fixtures de Usuarios (Sincrónicas, usan la sesión transaccional) ---
+
+@pytest.fixture(scope="function")
+def admin_user(db_session: Session) -> User:
+    """Crea un usuario admin DENTRO de la transacción del test."""
     admin = User(
         email="admin@example.com",
         full_name="Test Admin",
@@ -78,8 +84,44 @@ def admin_user(db_session):
     db_session.refresh(admin)
     return admin
 
-@pytest_asyncio.fixture()
-async def admin_token(client, admin_user):
+@pytest.fixture(scope="function")
+def manager_user(db_session: Session) -> User:
+    """Crea un usuario 'manager' DENTRO de la transacción del test."""
+    manager = User(
+        email="manager@example.com",
+        full_name="Test Manager",
+        hashed_password=get_password_hash("Manager1234"),
+        is_superuser=False,
+        is_active=True,
+        email_verified=True,
+    )
+    db_session.add(manager)
+    db_session.commit()
+    db_session.refresh(manager)
+    return manager
+
+# vvv --- FIXTURES AÑADIDAS --- vvv
+@pytest.fixture(scope="function")
+def normal_user(db_session: Session) -> User:
+    """Crea un usuario normal DENTRO de la transacción del test."""
+    user = User(
+        email="user@example.com",
+        full_name="Test User",
+        hashed_password=get_password_hash("User1234"),
+        is_superuser=False,
+        is_active=True,
+        email_verified=True,
+    )
+    db_session.add(user)
+    db_session.commit()
+    db_session.refresh(user)
+    return user
+# ^^^ ------------------------- ^^^
+
+# --- Fixtures de Tokens (Asíncronas, dependen de las fixtures de usuario) ---
+
+@pytest_asyncio.fixture(scope="function")
+async def admin_token(client: httpx.AsyncClient, admin_user: User) -> str:
     """Devuelve un access token válido para el admin."""
     resp = await client.post(
         "/api/v1/auth/login",
@@ -89,26 +131,21 @@ async def admin_token(client, admin_user):
     assert resp.status_code == 200, resp.text
     return resp.json()["access_token"]
 
-@pytest.fixture()
-def normal_user(db_session):
-    from app.models.user import User
-    from app.core.security import get_password_hash
-
-    u = User(
-        email="user@example.com",
-        full_name="User Normal",
-        hashed_password=get_password_hash("User1234"),
-        is_superuser=False,
-        is_active=True,
-        email_verified=True,
+@pytest_asyncio.fixture(scope="function")
+async def manager_token(client: httpx.AsyncClient, manager_user: User) -> str:
+    """Devuelve un token para el 'manager'."""
+    resp = await client.post(
+        "/api/v1/auth/login",
+        data={"username": manager_user.email, "password": "Manager1234"},
+        headers={"Content-Type": "application/x-www-form-urlencoded"},
     )
-    db_session.add(u)
-    db_session.commit()
-    db_session.refresh(u)
-    return u
+    assert resp.status_code == 200, resp.text
+    return resp.json()["access_token"]
 
-@pytest_asyncio.fixture()
-async def user_token(client, normal_user):
+# vvv --- FIXTURES AÑADIDAS --- vvv
+@pytest_asyncio.fixture(scope="function")
+async def user_token(client: httpx.AsyncClient, normal_user: User) -> str:
+    """Devuelve un token para un usuario normal."""
     resp = await client.post(
         "/api/v1/auth/login",
         data={"username": normal_user.email, "password": "User1234"},
@@ -116,3 +153,4 @@ async def user_token(client, normal_user):
     )
     assert resp.status_code == 200, resp.text
     return resp.json()["access_token"]
+# ^^^ ------------------------- ^^^
