@@ -28,6 +28,17 @@ from app.services.email_service import send_verification_email
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
+def _get_user_scopes(user: User) -> list[str]:
+    """Centraliza la lógica de asignación de scopes según el rol del usuario."""
+    user_scopes = ["users:me"]
+    if user.is_superuser:
+        user_scopes.extend(["admin", "products:read", "products:write", "purchases:read", "purchases:write"])
+    else:
+        # Asignamos scopes de solo lectura a usuarios no-admin.
+        user_scopes.extend(["products:read", "purchases:read"])
+    return user_scopes
+
+
 @router.post("/login", response_model=TokenPair)
 def login(
     form_data: OAuth2PasswordRequestForm = Depends(),
@@ -42,15 +53,7 @@ def login(
     
     # ... (código de verificación de email sin cambios)
 
-    # ---- Asignación de Scopes Granulares (AJUSTADA) ----
-    user_scopes = ["users:me"]
-    if user.is_superuser:
-        user_scopes.extend(["admin", "products:read", "products:write", "purchases:read", "purchases:write"])
-    else:
-        # **AQUÍ ESTÁ EL CAMBIO**: Asignamos scopes de solo lectura a usuarios no-admin.
-        # Esto permite que el test del 'manager' funcione correctamente.
-        user_scopes.extend(["products:read", "purchases:read"])
-
+    user_scopes = _get_user_scopes(user)
     access = create_access_token(subject=user.id, extra={"scopes": user_scopes})
     refresh = create_refresh_token(subject=user.id, extra={"scopes": user_scopes})
 
@@ -157,10 +160,7 @@ def oauth_upsert(data: dict, db: Session = Depends(get_db)):
             detail="Email not verified. Verification sent.",
         )
 
-    # scopes según rol
-    user_scopes = ["users:me"]
-    if user.is_superuser:
-        user_scopes += ["admin", "products:write", "purchases:write"]
+    user_scopes = _get_user_scopes(user)
 
     access = create_access_token(subject=user.id, extra={"scopes": user_scopes})
     refresh = create_refresh_token(subject=user.id, extra={"scopes": user_scopes})

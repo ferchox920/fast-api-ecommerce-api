@@ -10,7 +10,7 @@ if str(ROOT_DIR) not in sys.path:
 import pytest
 import pytest_asyncio
 import httpx
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, text, text, text
 from sqlalchemy.orm import sessionmaker, Session
 from typing import Generator
 
@@ -46,6 +46,11 @@ def db_session() -> Generator[Session, any, None]:
     connection = sync_engine.connect()
     transaction = connection.begin()
     session = TestingSessionLocal(bind=connection)
+
+    # Asegurarse de que la tabla de movimientos se recree en cada test
+    # para recoger los cambios en el schema que no maneja Alembic/SQLAlchemy.
+    session.execute(text("DROP TABLE IF EXISTS inventory_movements"))
+
     try:
         yield session
     finally:
@@ -142,7 +147,6 @@ async def manager_token(client: httpx.AsyncClient, manager_user: User) -> str:
     assert resp.status_code == 200, resp.text
     return resp.json()["access_token"]
 
-# vvv --- FIXTURES AÑADIDAS --- vvv
 @pytest_asyncio.fixture(scope="function")
 async def user_token(client: httpx.AsyncClient, normal_user: User) -> str:
     """Devuelve un token para un usuario normal."""

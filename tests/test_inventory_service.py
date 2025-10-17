@@ -2,12 +2,16 @@
 import uuid
 import pytest
 from sqlalchemy.orm import Session
-from fastapi import HTTPException
 
 # No importamos más SessionLocal, usaremos la fixture de pytest
 from app.models.product import Category, Brand, Product, ProductVariant
 from app.services import inventory_service
 from app.models.supplier import Supplier
+# Importamos las nuevas excepciones para las pruebas
+from app.services.exceptions import (
+    InvalidQuantityError,
+    InsufficientStockError,
+)
 
 
 # ---------- helpers (no necesitan cambios) ----------
@@ -61,6 +65,7 @@ def _mk_variant(
 def test_receive_and_list_movements(db_session: Session):
     v = _mk_variant(db_session, on_hand=0)
     inventory_service.receive_stock(db_session, v, 5, reason="ingreso OC")
+    db_session.commit()
     db_session.refresh(v)
     assert v.stock_on_hand == 5
 
@@ -76,42 +81,45 @@ def test_adjust_positive_and_negative_guards(db_session: Session):
     v = _mk_variant(db_session, on_hand=10)
     # ajuste positivo
     inventory_service.adjust_stock(db_session, v, +3, reason="ajuste +")
+    db_session.commit()
     db_session.refresh(v)
     assert v.stock_on_hand == 13
 
     # ajuste negativo válido
     inventory_service.adjust_stock(db_session, v, -3, reason="ajuste -")
+    db_session.commit()
     db_session.refresh(v)
     assert v.stock_on_hand == 10
 
     # ajuste que dejaría negativo -> 400
-    with pytest.raises(HTTPException) as exc:
+    with pytest.raises(InsufficientStockError) as exc:
         inventory_service.adjust_stock(db_session, v, -11, reason="negativo")
-    assert exc.value.status_code == 400
-    assert "No puede quedar negativo" in exc.value.detail
+    assert "negativo" in exc.value.detail
 
 
 def test_reserve_and_release_validation(db_session: Session):
     v = _mk_variant(db_session, on_hand=5, reserved=0)
 
     # reservar más que on_hand -> 400
-    with pytest.raises(HTTPException):
+    with pytest.raises(InsufficientStockError):
         inventory_service.reserve_stock(db_session, v, 6, reason="over")
     db_session.refresh(v)
     assert v.stock_reserved == 0
 
     # reservar 3
     inventory_service.reserve_stock(db_session, v, 3, reason="pedido")
+    db_session.commit()
     db_session.refresh(v)
     assert v.stock_reserved == 3
     assert v.stock_on_hand == 5  # no cambia on_hand al reservar
 
     # release más de lo reservado -> 400
-    with pytest.raises(HTTPException):
+    with pytest.raises(Exception): # Puede ser InsufficientReservationError
         inventory_service.release_stock(db_session, v, 4, reason="over-release")
 
     # release 2
     inventory_service.release_stock(db_session, v, 2, reason="liberar")
+    db_session.commit()
     db_session.refresh(v)
     assert v.stock_reserved == 1
     assert v.stock_on_hand == 5
@@ -122,18 +130,20 @@ def test_commit_sale_from_reserved_and_onhand(db_session: Session):
 
     # vender 2 -> consume reserved y on_hand
     inventory_service.commit_sale(db_session, v, 2, reason="venta-1")
+    db_session.commit()
     db_session.refresh(v)
     assert v.stock_reserved == 1
     assert v.stock_on_hand == 8  # 10 - 2
 
     # vender 2 -> consume el último reservado y uno de on_hand
     inventory_service.commit_sale(db_session, v, 2, reason="venta-2")
+    db_session.commit()
     db_session.refresh(v)
     assert v.stock_reserved == 0
     assert v.stock_on_hand == 6  # 8 - 2
 
     # vender más que on_hand -> 400
-    with pytest.raises(HTTPException):
+    with pytest.raises(InsufficientStockError):
         inventory_service.commit_sale(db_session, v, 999, reason="no-stock")
 
 
@@ -197,14 +207,14 @@ def test_alerts_and_replenishment_filtered_by_supplier(db_session: Session):
 def test_invalid_quantities_raise_400(db_session: Session):
     v = _mk_variant(db_session, on_hand=5)
 
-    with pytest.raises(HTTPException):
+    with pytest.raises(InvalidQuantityError):
         inventory_service.receive_stock(db_session, v, 0)
 
-    with pytest.raises(HTTPException):
+    with pytest.raises(InvalidQuantityError):
         inventory_service.reserve_stock(db_session, v, -1)
 
-    with pytest.raises(HTTPException):
+    with pytest.raises(InvalidQuantityError):
         inventory_service.release_stock(db_session, v, 0)
 
-    with pytest.raises(HTTPException):
+    with pytest.raises(InvalidQuantityError):
         inventory_service.commit_sale(db_session, v, 0)

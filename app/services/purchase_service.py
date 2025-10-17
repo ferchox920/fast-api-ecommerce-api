@@ -1,7 +1,7 @@
 # app/services/purchase_service.py (fragmentos clave)
 from __future__ import annotations
 from sqlalchemy.orm import Session
-from fastapi import HTTPException
+from fastapi import HTTPException, status
 import uuid
 
 from app.models.supplier import Supplier
@@ -9,6 +9,7 @@ from app.models.purchase import PurchaseOrder, PurchaseOrderLine, POStatus
 from app.models.product import ProductVariant
 from app.schemas.supplier import SupplierCreate, SupplierUpdate
 from app.services import inventory_service
+from app.services.exceptions import ServiceError
 from app.schemas.purchase import POCreate, POLineCreate, POReceivePayload  # <-- tus schemas reales
 from sqlalchemy import func, select
 from app.services import product_service
@@ -113,7 +114,11 @@ def receive_po(db: Session, po: PurchaseOrder, payload: POReceivePayload) -> Pur
         # movimiento de inventario
         variant = db.get(ProductVariant, line.variant_id)
         reason = payload.reason or f"PO {po.id}"
-        product_service.receive_stock(db, variant, r.quantity, reason)
+        try:
+            # Asumimos que product_service.receive_stock llama a inventory_service.receive_stock
+            inventory_service.receive_stock(db, variant, r.quantity, reason)
+        except ServiceError as e:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
 
     # actualizar estado
     total_remaining = sum(l.qty_ordered - l.qty_received for l in po.lines)

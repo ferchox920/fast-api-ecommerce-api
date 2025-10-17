@@ -1,10 +1,15 @@
 from sqlalchemy.orm import Session
 from sqlalchemy import text, inspect, select
-from fastapi import HTTPException
 import uuid
 
 from app.models.product import ProductVariant
-
+# Importamos las nuevas excepciones de dominio
+from app.services.exceptions import (
+    InvalidQuantityError,
+    InsufficientStockError,
+    InsufficientReservationError,
+)
+ 
 # Clave para no repetir el ensure por sesión/bind
 _MOVEMENTS_READY_KEY = "inventory_movements_ready"
 
@@ -81,15 +86,20 @@ def _log_movement(db: Session, variant: ProductVariant, mtype: str, qty: int, re
     )
 
 
-def _commit_with_movement(
+def _log_and_add_movement(
     db: Session,
     variant: ProductVariant,
     mtype: str,
     qty: int,
     reason: str | None,
 ) -> ProductVariant:
-    """Helper para registrar movimiento + commit + refresh."""
+    """Helper para añadir la variante a la sesión y registrar el movimiento, SIN commit."""
+    db.add(variant)
     _log_movement(db, variant, mtype, qty, reason)
+    return variant
+
+def _commit_and_refresh(db: Session, variant: ProductVariant) -> ProductVariant:
+    """Helper para hacer commit y refresh de una variante."""
     db.commit()
     db.refresh(variant)
     return variant
@@ -97,49 +107,46 @@ def _commit_with_movement(
 
 def receive_stock(db: Session, variant: ProductVariant, quantity: int, reason: str | None = None) -> ProductVariant:
     if quantity <= 0:
-        raise HTTPException(status_code=400, detail="quantity debe ser > 0")
+        raise InvalidQuantityError("La cantidad debe ser mayor que 0.")
     variant.stock_on_hand += quantity
-    db.add(variant)
-    return _commit_with_movement(db, variant, "receive", quantity, reason)
+    # NO commit here. The caller (service layer) will commit.
+    return _log_and_add_movement(db, variant, "receive", quantity, reason)
 
 
 def adjust_stock(db: Session, variant: ProductVariant, quantity: int, reason: str | None = None) -> ProductVariant:
     new_on_hand = variant.stock_on_hand + quantity
     if new_on_hand < 0:
-        raise HTTPException(status_code=400, detail="No puede quedar negativo")
+        raise InsufficientStockError("El stock no puede quedar en negativo.")
     variant.stock_on_hand = new_on_hand
-    db.add(variant)
     # guardamos el módulo para el histórico (mantiene tu comportamiento previo)
-    return _commit_with_movement(db, variant, "adjust", abs(quantity), reason)
+    return _log_and_add_movement(db, variant, "adjust", abs(quantity), reason)
 
 
 def reserve_stock(db: Session, variant: ProductVariant, quantity: int, reason: str | None = None) -> ProductVariant:
     if quantity <= 0:
-        raise HTTPException(status_code=400, detail="quantity debe ser > 0")
+        raise InvalidQuantityError("La cantidad debe ser mayor que 0.")
     if variant.stock_reserved + quantity > variant.stock_on_hand:
-        raise HTTPException(status_code=400, detail="No hay stock suficiente para reservar")
+        raise InsufficientStockError("No hay stock disponible suficiente para reservar la cantidad solicitada.")
     variant.stock_reserved += quantity
-    db.add(variant)
-    return _commit_with_movement(db, variant, "reserve", quantity, reason)
+    return _log_and_add_movement(db, variant, "reserve", quantity, reason)
 
 
 def release_stock(db: Session, variant: ProductVariant, quantity: int, reason: str | None = None) -> ProductVariant:
     if quantity <= 0:
-        raise HTTPException(status_code=400, detail="quantity debe ser > 0")
+        raise InvalidQuantityError("La cantidad debe ser mayor que 0.")
     if quantity > variant.stock_reserved:
-        raise HTTPException(status_code=400, detail="No hay reservado suficiente")
+        raise InsufficientReservationError("No se puede liberar más stock del que está reservado.")
     variant.stock_reserved -= quantity
-    db.add(variant)
-    return _commit_with_movement(db, variant, "release", quantity, reason)
+    return _log_and_add_movement(db, variant, "release", quantity, reason)
 
 
 def commit_sale(db: Session, variant: ProductVariant, quantity: int, reason: str | None = None) -> ProductVariant:
     if quantity <= 0:
-        raise HTTPException(status_code=400, detail="quantity debe ser > 0")
+        raise InvalidQuantityError("La cantidad debe ser mayor que 0.")
 
     # Debe existir stock suficiente total
     if quantity > variant.stock_on_hand:
-        raise HTTPException(status_code=400, detail="No hay stock suficiente para la venta")
+        raise InsufficientStockError("No hay stock disponible suficiente para la venta.")
 
     # Consumir reservado primero hasta donde alcance
     consume_reserved = min(quantity, variant.stock_reserved)
@@ -150,10 +157,9 @@ def commit_sale(db: Session, variant: ProductVariant, quantity: int, reason: str
 
     if variant.stock_on_hand < 0:
         # guardrail extra (no debería suceder por el check anterior)
-        raise HTTPException(status_code=400, detail="No puede quedar negativo")
+        raise InsufficientStockError("El stock no puede quedar en negativo.")
 
-    db.add(variant)
-    return _commit_with_movement(db, variant, "sale", quantity, reason)
+    return _log_and_add_movement(db, variant, "sale", quantity, reason)
 
 
 def list_movements(db: Session, variant: ProductVariant, limit: int = 50, offset: int = 0):

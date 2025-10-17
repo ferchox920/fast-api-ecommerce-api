@@ -2,7 +2,7 @@
 from sqlalchemy.orm import Session
 from sqlalchemy import text, inspect
 from fastapi import HTTPException
-from datetime import datetime, timezone
+from datetime import datetime, timezone, UTC  # ya está importado
 import uuid
 
 from app.models.product import ProductVariant
@@ -13,11 +13,9 @@ _MOVEMENTS_READY_KEY = "inventory_movements_ready"
 
 def _ensure_movements_table(db: Session) -> None:
     """
-    Garantiza que 'inventory_movements' exista.
-    - En SQLite: CREATE TABLE IF NOT EXISTS (sin migraciones).
-    - En otros motores: usa Inspector.has_table(); si no existe, intenta crear
-      con el modelo (si está disponible) y por último un CREATE TABLE defensivo.
-    Se ejecuta solo 1 vez por bind/sesión gracias a db.info.
+    Garantiza que exista 'inventory_movements' una sola vez por bind/sesión.
+    - En SQLite: crea la tabla con tipos TEXT/INTEGER (sin migraciones).
+    - En otros motores: intenta con el modelo; si falla, hace un CREATE defensivo.
     """
     if db.info.get(_MOVEMENTS_READY_KEY):
         return
@@ -26,6 +24,7 @@ def _ensure_movements_table(db: Session) -> None:
     dialect = getattr(bind.dialect, "name", "unknown")
 
     if dialect == "sqlite":
+        # SQLite: tipos textuales para máxima compatibilidad
         db.execute(text("""
             CREATE TABLE IF NOT EXISTS inventory_movements (
                 id TEXT PRIMARY KEY,
@@ -33,41 +32,41 @@ def _ensure_movements_table(db: Session) -> None:
                 quantity INTEGER NOT NULL,
                 type VARCHAR(50) NOT NULL,
                 reason VARCHAR(255),
-                created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+                created_at TIMESTAMP NOT NULL
             )
         """))
         db.info[_MOVEMENTS_READY_KEY] = True
         return
 
+    # Otros motores (e.g., Postgres, MySQL)
     insp = inspect(bind)
-    if insp.has_table("inventory_movements"):
-        db.info[_MOVEMENTS_READY_KEY] = True
-        return
+    if not insp.has_table("inventory_movements"):
+        try:
+            # Si existe el modelo declarativo, úsalo
+            from app.models.inventory import InventoryMovement
+            InventoryMovement.__table__.create(bind=bind, checkfirst=True)
+        except Exception:
+            # Fallback defensivo
+            db.execute(text("""
+                CREATE TABLE IF NOT EXISTS inventory_movements (
+                    id UUID PRIMARY KEY,
+                    variant_id UUID NOT NULL,
+                    quantity INTEGER NOT NULL,
+                    type VARCHAR(50) NOT NULL,
+                    reason VARCHAR(255),
+                    created_at TIMESTAMP NOT NULL
+                )
+            """))
 
-    try:
-        from app.models.inventory import InventoryMovement
-        InventoryMovement.__table__.create(bind=bind, checkfirst=True)
-    except Exception:
-        db.execute(text("""
-            CREATE TABLE IF NOT EXISTS inventory_movements (
-                id UUID PRIMARY KEY,
-                variant_id UUID NOT NULL,
-                quantity INTEGER NOT NULL,
-                type VARCHAR(50) NOT NULL,
-                reason VARCHAR(255),
-                created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
-            )
-        """))
-    finally:
-        db.info[_MOVEMENTS_READY_KEY] = True
+    db.info[_MOVEMENTS_READY_KEY] = True
 
 
 def _log_movement(db: Session, variant: ProductVariant, mtype: str, qty: int, reason: str | None) -> None:
     _ensure_movements_table(db)
     db.execute(
         text("""
-            INSERT INTO inventory_movements (id, variant_id, quantity, type, reason)
-            VALUES (:id, :variant_id, :quantity, :type, :reason)
+            INSERT INTO inventory_movements (id, variant_id, quantity, type, reason, created_at)
+            VALUES (:id, :variant_id, :quantity, :type, :reason, :created_at)
         """),
         {
             "id": str(uuid.uuid4()),
@@ -75,6 +74,8 @@ def _log_movement(db: Session, variant: ProductVariant, mtype: str, qty: int, re
             "quantity": int(qty),
             "type": mtype,
             "reason": reason,
+            # ✅ UTC aware -> ISO string (lex-ordenable y sin adapter de sqlite)
+            "created_at": datetime.now(UTC).isoformat(timespec="seconds"),
         },
     )
 
