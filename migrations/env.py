@@ -22,6 +22,13 @@ from app.db.session import Base  # tu declarative Base
 from app.models import product   # noqa: F401  # Category, Brand, Product, ProductVariant, ProductImage
 from app.models import supplier  # noqa: F401  # Supplier
 from app.models import purchase  # noqa: F401  # PurchaseOrder, PurchaseOrderLine
+from app.models import order     # noqa: F401  # Order, OrderLine
+from app.models import cart      # noqa: F401  # Cart, CartItem
+from app.models import product_question  # noqa: F401  # ProductQuestion, ProductAnswer
+from app.models import notification  # noqa: F401  # Notification
+from app.models import engagement  # noqa: F401  # ProductEngagementDaily, ProductRanking, ExposureSlot
+from app.models import promotion   # noqa: F401  # Promotion
+from app.models import loyalty     # noqa: F401  # Loyalty
 # importa user, inventory, etc. si existen y usan Base
 # from app.models import user     # noqa: F401
 # from app.models import inventory  # noqa: F401

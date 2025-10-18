@@ -32,6 +32,10 @@ def setup_database():
     import app.models.inventory
     import app.models.supplier
     import app.models.purchase
+    import app.models.order
+    import app.models.cart
+    import app.models.product_question
+    import app.models.notification
     
     Base.metadata.create_all(bind=sync_engine)
     yield

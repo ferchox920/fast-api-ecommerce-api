@@ -7,3 +7,4 @@ python-jose[cryptography]
 pydantic
 pydantic-settings
 python-multipart
+httpx
