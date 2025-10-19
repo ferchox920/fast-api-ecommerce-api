@@ -5,7 +5,7 @@ from datetime import date
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.db.operations import flush_async, refresh_async, run_sync
+from app.db.operations import flush_async, refresh_async
 from app.models.engagement import CustomerEngagementDaily
 from app.models.loyalty import LoyaltyLevel, LoyaltyProfile, LoyaltyHistory
 from app.schemas.engagement import EventCreate
@@ -94,7 +94,7 @@ async def process_purchase_event(db: AsyncSession, event: EventCreate, event_dat
     await refresh_async(db, profile)
 
     if prev_level != new_level.level:
-        await run_sync(db, notification_service.notify_loyalty_upgrade, profile, prev_level)
+        await notification_service.notify_loyalty_upgrade(db, profile, prev_level)
         emit_loyalty_event(
             "loyalty_upgrade",
             {
@@ -130,7 +130,7 @@ async def apply_adjustment(db: AsyncSession, payload: LoyaltyAdjustPayload) -> L
     await refresh_async(db, profile)
 
     if prev_level != profile.level:
-        await run_sync(db, notification_service.notify_loyalty_upgrade, profile, prev_level)
+        await notification_service.notify_loyalty_upgrade(db, profile, prev_level)
         emit_loyalty_event(
             "loyalty_upgrade",
             {

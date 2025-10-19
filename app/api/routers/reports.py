@@ -5,7 +5,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_current_user
 from app.core.config import settings
-from app.db.operations import run_sync
 from app.db.session_async import get_async_db
 from app.models.user import User
 from app.schemas.report import (
@@ -32,7 +31,7 @@ async def get_sales(
     current_user: User = Security(get_current_user, scopes=["admin", "purchases:read"]),
 ):
     if settings.CELERY_TASK_ALWAYS_EAGER:
-        return await run_sync(db, report_service.get_sales_report, days)
+        return await report_service.get_sales_report(db, days)
     async_result = report_tasks.generate_sales_report.delay(days=days)
     return _execute_task(async_result, SalesReport)
 
@@ -47,7 +46,7 @@ async def get_inventory_value(
     current_user: User = Security(get_current_user, scopes=["admin", "purchases:read"]),
 ):
     if settings.CELERY_TASK_ALWAYS_EAGER:
-        return await run_sync(db, report_service.get_inventory_value_report)
+        return await report_service.get_inventory_value_report(db)
     async_result = report_tasks.generate_inventory_value_report.delay()
     return _execute_task(async_result, InventoryValueReport)
 
@@ -63,7 +62,7 @@ async def get_cost_analysis(
     current_user: User = Security(get_current_user, scopes=["admin", "purchases:read"]),
 ):
     if settings.CELERY_TASK_ALWAYS_EAGER:
-        return await run_sync(db, report_service.get_cost_analysis_report, days)
+        return await report_service.get_cost_analysis_report(db, days)
     async_result = report_tasks.generate_cost_analysis_report.delay(days=days)
     return _execute_task(async_result, CostAnalysisReport)
 
@@ -79,6 +78,6 @@ async def get_inventory_rotation(
     current_user: User = Security(get_current_user, scopes=["admin", "purchases:read"]),
 ):
     if settings.CELERY_TASK_ALWAYS_EAGER:
-        return await run_sync(db, report_service.get_inventory_rotation_report, days)
+        return await report_service.get_inventory_rotation_report(db, days)
     async_result = report_tasks.generate_inventory_rotation_report.delay(days=days)
     return _execute_task(async_result, InventoryRotationReport)

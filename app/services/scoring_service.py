@@ -13,7 +13,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
-from app.db.operations import flush_async, run_sync
+from app.db.operations import flush_async
 from app.models.engagement import ProductEngagementDaily, ProductRanking
 from app.services import catalog_client
 
@@ -93,7 +93,7 @@ async def run_scoring(db: AsyncSession, window_days: int = WINDOW_DAYS) -> dict:
             + metrics["purchases"] * 1.2
         )
 
-        fin = await run_sync(db, catalog_client.get_financial_metrics, product_uuid)
+        fin = await catalog_client.get_financial_metrics(db, product_uuid)
         margin = fin.get("margin", Decimal("0"))
         stock = fin.get("stock_on_hand", 0)
 

@@ -6,7 +6,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
-from app.db.operations import flush_async, refresh_async, run_sync
+from app.db.operations import flush_async, refresh_async
 from app.models.product import Product
 from app.models.user import User
 from app.models.product_question import ProductQuestion, ProductAnswer, QuestionStatus
@@ -74,7 +74,7 @@ async def create_question(
     await flush_async(db, question)
     await refresh_async(db, question)
 
-    await run_sync(db, notification_service.notify_admin_new_question, question)
+    await notification_service.notify_admin_new_question(db, question)
     return await _load_question(db, question.id)
 
 
@@ -101,7 +101,7 @@ async def create_answer(
 
     loaded_question = await _load_question(db, question_uuid)
     synced_answer = next((ans for ans in loaded_question.answers if ans.id == answer.id), answer)
-    await run_sync(db, notification_service.notify_question_answer, loaded_question, synced_answer)
+    await notification_service.notify_question_answer(db, loaded_question, synced_answer)
     return loaded_question
 
 

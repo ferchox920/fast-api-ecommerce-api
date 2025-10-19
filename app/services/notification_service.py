@@ -1,13 +1,15 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import asyncio
 import uuid
 from datetime import datetime, timezone
-from typing import Iterable, Optional
+from typing import Iterable
 
-from sqlalchemy.orm import Session
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.notification_manager import manager as ws_manager
+from app.db.operations import flush_async, refresh_async
 from app.models.notification import Notification, NotificationType
 from app.models.order import Order
 from app.models.product_question import ProductQuestion, ProductAnswer
@@ -21,22 +23,28 @@ def _utcnow() -> datetime:
     return datetime.now(timezone.utc)
 
 
-def list_notifications(db: Session, user: User, limit: int = 50, offset: int = 0):
-    return (
-        db.query(Notification)
-        .filter(Notification.user_id == user.id)
+async def list_notifications(db: AsyncSession, user: User, limit: int = 50, offset: int = 0) -> list[Notification]:
+    stmt = (
+        select(Notification)
+        .where(Notification.user_id == user.id)
         .order_by(Notification.created_at.desc())
         .offset(offset)
         .limit(limit)
-        .all()
     )
+    result = await db.execute(stmt)
+    return result.scalars().all()
 
 
-def _get_user(db: Session, user_id: str) -> Optional[User]:
-    return db.query(User).filter(User.id == user_id).first()
+async def _get_user(db: AsyncSession, user_id: str) -> User | None:
+    return await db.get(User, user_id)
 
 
-def create_notification(db: Session, data: NotificationCreate, *, send_email: bool = False) -> Notification:
+async def create_notification(
+    db: AsyncSession,
+    data: NotificationCreate,
+    *,
+    send_email: bool = False,
+) -> Notification:
     notification = Notification(
         user_id=data.user_id,
         type=NotificationType(data.type),
@@ -45,8 +53,8 @@ def create_notification(db: Session, data: NotificationCreate, *, send_email: bo
         payload=data.payload,
     )
     db.add(notification)
-    db.flush()
-    db.refresh(notification)
+    await flush_async(db, notification)
+    await refresh_async(db, notification)
 
     payload = {
         "id": str(notification.id),
@@ -57,14 +65,10 @@ def create_notification(db: Session, data: NotificationCreate, *, send_email: bo
         "created_at": notification.created_at.isoformat(),
     }
 
-    try:
-        loop = asyncio.get_running_loop()
-        loop.create_task(ws_manager.send_to_user(notification.user_id, payload))
-    except RuntimeError:
-        pass
+    asyncio.create_task(ws_manager.send_to_user(notification.user_id, payload))
 
     if send_email:
-        user = _get_user(db, notification.user_id)
+        user = await _get_user(db, notification.user_id)
         if user and user.email:
             email_service.send_notification_email(
                 to_email=user.email,
@@ -75,30 +79,37 @@ def create_notification(db: Session, data: NotificationCreate, *, send_email: bo
     return notification
 
 
-def mark_read(db: Session, notification_id: str, user: User, payload: NotificationUpdate) -> Notification:
+async def mark_read(
+    db: AsyncSession,
+    notification_id: str,
+    user: User,
+    payload: NotificationUpdate,
+) -> Notification:
     try:
         notif_uuid = uuid.UUID(str(notification_id))
     except Exception as exc:
         raise DomainValidationError("Invalid notification id") from exc
 
-    notification = db.get(Notification, notif_uuid)
+    notification = await db.get(Notification, notif_uuid)
     if not notification or notification.user_id != user.id:
         raise ResourceNotFoundError("Notification not found")
 
     notification.is_read = payload.is_read
     notification.read_at = _utcnow() if payload.is_read else None
     db.add(notification)
-    db.flush()
-    db.refresh(notification)
+    await flush_async(db, notification)
+    await refresh_async(db, notification)
     return notification
 
 
-def notify_admin_new_question(db: Session, question: ProductQuestion) -> None:
-    admins: Iterable[User] = (
-        db.query(User)
-        .filter(User.is_superuser == True)  # noqa: E712
-        .all()
-    )
+async def _iter_admins(db: AsyncSession) -> Iterable[User]:
+    stmt = select(User).where(User.is_superuser == True)  # noqa: E712
+    result = await db.execute(stmt)
+    return result.scalars().all()
+
+
+async def notify_admin_new_question(db: AsyncSession, question: ProductQuestion) -> None:
+    admins = await _iter_admins(db)
     title = "Nueva pregunta de producto"
     message = f"Pregunta sobre producto {question.product_id}: {question.content[:140]}"
     for admin in admins:
@@ -109,10 +120,10 @@ def notify_admin_new_question(db: Session, question: ProductQuestion) -> None:
             message=message,
             payload={"question_id": str(question.id), "product_id": str(question.product_id)},
         )
-        create_notification(db, data)
+        await create_notification(db, data)
 
 
-def notify_question_answer(db: Session, question: ProductQuestion, answer: ProductAnswer) -> None:
+async def notify_question_answer(db: AsyncSession, question: ProductQuestion, answer: ProductAnswer) -> None:
     if not question.user_id:
         return
     data = NotificationCreate(
@@ -126,10 +137,10 @@ def notify_question_answer(db: Session, question: ProductQuestion, answer: Produ
             "product_id": str(question.product_id),
         },
     )
-    create_notification(db, data, send_email=True)
+    await create_notification(db, data, send_email=True)
 
 
-def notify_order_status(db: Session, order: Order, title: str, message: str) -> None:
+async def notify_order_status(db: AsyncSession, order: Order, title: str, message: str) -> None:
     if not order.user_id:
         return
     data = NotificationCreate(
@@ -144,15 +155,11 @@ def notify_order_status(db: Session, order: Order, title: str, message: str) -> 
             "shipping_status": order.shipping_status.value,
         },
     )
-    create_notification(db, data, send_email=True)
+    await create_notification(db, data, send_email=True)
 
 
-def notify_new_order(db: Session, order: Order) -> None:
-    admins: Iterable[User] = (
-        db.query(User)
-        .filter(User.is_superuser == True)  # noqa: E712
-        .all()
-    )
+async def notify_new_order(db: AsyncSession, order: Order) -> None:
+    admins = await _iter_admins(db)
     title = "Nueva orden creada"
     message = f"Orden {order.id} por total {order.total_amount}"
     for admin in admins:
@@ -163,15 +170,11 @@ def notify_new_order(db: Session, order: Order) -> None:
             message=message,
             payload={"order_id": str(order.id)},
         )
-        create_notification(db, data)
+        await create_notification(db, data)
 
 
-def notify_new_promotion(db: Session, promotion) -> None:
-    admins: Iterable[User] = (
-        db.query(User)
-        .filter(User.is_superuser == True)  # noqa: E712
-        .all()
-    )
+async def notify_new_promotion(db: AsyncSession, promotion) -> None:
+    admins = await _iter_admins(db)
     title = "Promoción activada"
     message = f"{promotion.name} activo hasta {promotion.end_at.date()}"
     for admin in admins:
@@ -182,10 +185,10 @@ def notify_new_promotion(db: Session, promotion) -> None:
             message=message,
             payload={"promotion_id": str(promotion.id)},
         )
-        create_notification(db, data)
+        await create_notification(db, data)
 
 
-def notify_loyalty_upgrade(db: Session, profile, previous_level: str) -> None:
+async def notify_loyalty_upgrade(db: AsyncSession, profile, previous_level: str) -> None:
     data = NotificationCreate(
         user_id=profile.customer_id,
         type=NotificationType.loyalty.value,
@@ -197,4 +200,4 @@ def notify_loyalty_upgrade(db: Session, profile, previous_level: str) -> None:
             "points": profile.points,
         },
     )
-    create_notification(db, data, send_email=True)
+    await create_notification(db, data, send_email=True)

@@ -1,6 +1,6 @@
 # app/services/report_service.py
 from datetime import datetime, timedelta, UTC
-from sqlalchemy.orm import Session
+from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import (
     func, select, and_, or_, cast, String
 )
@@ -28,7 +28,7 @@ def _norm_uuid_sql(expr):
 # =========================
 # Reporte de Ventas
 # =========================
-def get_sales_report(db: Session, days: int = 30) -> SalesReport:
+async def get_sales_report(db: AsyncSession, days: int = 30) -> SalesReport:
     now_utc = datetime.now(UTC)
     start_date = now_utc - timedelta(days=days)
 
@@ -64,7 +64,8 @@ def get_sales_report(db: Session, days: int = 30) -> SalesReport:
         .order_by(sales_stmt.c.units_sold.desc())
     )
 
-    rows = db.execute(stmt).mappings().all()
+    result = await db.execute(stmt)
+    rows = result.mappings().all()
     top_sellers = [
         TopSeller(
             product_id=row["product_id"],
@@ -79,17 +80,15 @@ def get_sales_report(db: Session, days: int = 30) -> SalesReport:
     total_revenue = sum(ts.estimated_revenue for ts in top_sellers)
     total_units_sold = sum(ts.units_sold for ts in top_sellers)
 
-    total_sales_transactions = (
-        db.execute(
-            select(func.count())
-            .select_from(InventoryMovement)
-            .where(
-                InventoryMovement.type == MovementKind.SALE,
-                InventoryMovement.created_at >= start_date,
-            )
-        ).scalar_one_or_none()
-        or 0
+    total_sales_result = await db.execute(
+        select(func.count())
+        .select_from(InventoryMovement)
+        .where(
+            InventoryMovement.type == MovementKind.SALE,
+            InventoryMovement.created_at >= start_date,
+        )
     )
+    total_sales_transactions = total_sales_result.scalar_one_or_none() or 0
 
     sales_summary = SalesSummary(
         total_revenue=total_revenue,
@@ -107,7 +106,7 @@ def get_sales_report(db: Session, days: int = 30) -> SalesReport:
 # =========================
 # Valor de Inventario
 # =========================
-def get_inventory_value_report(db: Session) -> InventoryValueReport:
+async def get_inventory_value_report(db: AsyncSession) -> InventoryValueReport:
     """
     Calcula el valor estimado del inventario actual multiplicando
     stock_on_hand por el último costo recibido.
@@ -149,7 +148,8 @@ def get_inventory_value_report(db: Session) -> InventoryValueReport:
         .order_by(Product.title)
     )
 
-    rows = db.execute(stmt).mappings().all()
+    result = await db.execute(stmt)
+    rows = result.mappings().all()
 
     items = []
     total_value = 0.0
@@ -184,7 +184,7 @@ def get_inventory_value_report(db: Session) -> InventoryValueReport:
 # =========================
 # Análisis de Costos (Compras)
 # =========================
-def get_cost_analysis_report(db: Session, days: int = 30) -> CostAnalysisReport:
+async def get_cost_analysis_report(db: AsyncSession, days: int = 30) -> CostAnalysisReport:
     now_utc = datetime.now(UTC)
     start_date = now_utc - timedelta(days=days)
 
@@ -220,7 +220,8 @@ def get_cost_analysis_report(db: Session, days: int = 30) -> CostAnalysisReport:
         )
     )
 
-    rows = db.execute(stmt).mappings().all()
+    result = await db.execute(stmt)
+    rows = result.mappings().all()
 
     items = []
     for r in rows:
@@ -252,7 +253,7 @@ def get_cost_analysis_report(db: Session, days: int = 30) -> CostAnalysisReport:
 # =========================
 # Rotación de Inventario
 # =========================
-def get_inventory_rotation_report(db: Session, days: int = 30) -> InventoryRotationReport:
+async def get_inventory_rotation_report(db: AsyncSession, days: int = 30) -> InventoryRotationReport:
     """
     Calcula la rotación de inventario para identificar productos de movimiento lento.
     """
@@ -294,7 +295,8 @@ def get_inventory_rotation_report(db: Session, days: int = 30) -> InventoryRotat
         ProductVariant.stock_on_hand.desc(),
     )
 
-    rows = db.execute(stmt).mappings().all()
+    result = await db.execute(stmt)
+    rows = result.mappings().all()
 
     items = []
     for r in rows:

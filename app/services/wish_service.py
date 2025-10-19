@@ -9,7 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.celery_app import celery_app
 from app.core.config import settings
-from app.db.operations import flush_async, refresh_async, run_sync
+from app.db.operations import flush_async, refresh_async
 from app.models.notification import NotificationType
 from app.models.promotion import Promotion, PromotionStatus, PromotionType
 from app.models.wish import Wish, WishNotification, WishStatus
@@ -98,9 +98,8 @@ async def evaluate_wish(db: AsyncSession, wish_id: UUID) -> dict:
     for promo in promotions:
         message = f"Tu deseo para el producto {wish.product_id} tiene una promoción activa: {promo.name}"
         await record_notification(db, wish, "promotion", message)
-        await run_sync(
+        await notification_service.create_notification(
             db,
-            notification_service.create_notification,
             NotificationCreate(
                 user_id=wish.user_id,
                 type=NotificationType.promotion.value,
@@ -119,9 +118,8 @@ async def evaluate_wish(db: AsyncSession, wish_id: UUID) -> dict:
                 f"El producto de tu lista de deseos alcanzó el precio objetivo ({current_price} <= {wish.desired_price})."
             )
             await record_notification(db, wish, "price_drop", message)
-            await run_sync(
+            await notification_service.create_notification(
                 db,
-                notification_service.create_notification,
                 NotificationCreate(
                     user_id=wish.user_id,
                     type=NotificationType.promotion.value,

@@ -6,7 +6,8 @@ from typing import Optional, Sequence
 from uuid import UUID
 
 from sqlalchemy import delete, select
-from sqlalchemy.orm import Session
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 
 from app.core.config import settings
 from app.models.engagement import ExposureSlot, ProductRanking
@@ -48,7 +49,7 @@ def _load_previous_mix(slot: Optional[ExposureSlot]) -> set[str]:
         return set()
 
 
-def _select_rankings(db: Session, category_id: Optional[UUID], limit: int) -> Sequence[tuple[ProductRanking, Product]]:
+async def _select_rankings(db: AsyncSession, category_id: Optional[UUID], limit: int) -> Sequence[tuple[ProductRanking, Product]]:
     stmt = (
         select(ProductRanking, Product)
         .join(Product, ProductRanking.product_id == Product.id)
@@ -57,7 +58,8 @@ def _select_rankings(db: Session, category_id: Optional[UUID], limit: int) -> Se
     )
     if category_id:
         stmt = stmt.where(Product.category_id == category_id)
-    return db.execute(stmt).all()
+    result = await db.execute(stmt)
+    return result.all()
 
 
 def _promotion_lookup(promotions: Sequence[Promotion]) -> dict[str, Promotion]:
@@ -69,7 +71,7 @@ def _promotion_lookup(promotions: Sequence[Promotion]) -> dict[str, Promotion]:
     return promo_by_product
 
 
-def _promotion_for_product(db: Session, promotions: Sequence[Promotion], product: Product, promotion_map: dict[str, Promotion]) -> Optional[Promotion]:
+def _promotion_for_product(promotions: Sequence[Promotion], product: Product, promotion_map: dict[str, Promotion]) -> Optional[Promotion]:
     product_key = str(product.id)
     if product_key in promotion_map:
         return promotion_map[product_key]
@@ -109,8 +111,8 @@ def _build_item(product_id: UUID, ranking: ProductRanking, stock: int, promotion
     return ExposureItem(product_id=product_id, reason=reasons, badges=badges)
 
 
-def build_exposure(
-    db: Session,
+async def build_exposure(
+    db: AsyncSession,
     context: str,
     user_id: Optional[str],
     category_id: Optional[UUID] = None,
@@ -118,15 +120,19 @@ def build_exposure(
 ) -> dict:
     slot_context = _slot_context(context, category_id)
 
-    active_promos = db.execute(
-        select(Promotion).where(Promotion.status == PromotionStatus.active)
-    ).scalars().all()
+    result_promos = await db.execute(
+        select(Promotion)
+        .options(selectinload(Promotion.products))
+        .where(Promotion.status == PromotionStatus.active)
+    )
+    active_promos = result_promos.scalars().all()
     promo_by_product = _promotion_lookup(active_promos)
 
-    rankings = _select_rankings(db, category_id, limit * 4)
-    previous_slot = db.execute(
+    rankings = await _select_rankings(db, category_id, limit * 4)
+    previous_slot_result = await db.execute(
         select(ExposureSlot).where(ExposureSlot.context == slot_context).where(ExposureSlot.user_id == user_id)
-    ).scalar_one_or_none()
+    )
+    previous_slot = previous_slot_result.scalar_one_or_none()
     previous_products = _load_previous_mix(previous_slot)
 
         # INTEGRATION: Admin puede forzar pinning/unpinning temporal (flag en DB).
@@ -144,7 +150,7 @@ def build_exposure(
         if CATEGORY_CAP and category_counts[product_category] >= CATEGORY_CAP:
             continue
 
-        stock_info = catalog_client.get_financial_metrics(db, product.id)
+        stock_info = await catalog_client.get_financial_metrics(db, product.id)
         stock = stock_info.get("stock_on_hand", 0)
 
         if product_id_str in previous_products:
@@ -154,7 +160,7 @@ def build_exposure(
 
         cold_candidates.append((ranking, product))
 
-        promotion = promo_by_product.get(product_id_str) or _promotion_for_product(db, active_promos, product, promo_by_product)
+        promotion = promo_by_product.get(product_id_str) or _promotion_for_product(active_promos, product, promo_by_product)
 
         item = _build_item(product.id, ranking, stock, promotion, cold_boost=False)
         selected_items.append(item)
@@ -172,9 +178,9 @@ def build_exposure(
             product_category = str(product.category_id)
             if CATEGORY_CAP and category_counts[product_category] >= CATEGORY_CAP:
                 continue
-            stock_info = catalog_client.get_financial_metrics(db, product.id)
+            stock_info = await catalog_client.get_financial_metrics(db, product.id)
             stock = stock_info.get("stock_on_hand", 0)
-            promotion = promo_by_product.get(product_id_str) or _promotion_for_product(db, active_promos, product, promo_by_product)
+            promotion = promo_by_product.get(product_id_str) or _promotion_for_product(active_promos, product, promo_by_product)
             item = _build_item(product.id, ranking, stock, promotion, cold_boost=False)
             selected_items.append(item)
             selected_ids.add(product_id_str)
@@ -193,11 +199,11 @@ def build_exposure(
         product_category = str(product.category_id)
         if CATEGORY_CAP and category_counts[product_category] >= CATEGORY_CAP:
             continue
-        stock_info = catalog_client.get_financial_metrics(db, product.id)
+        stock_info = await catalog_client.get_financial_metrics(db, product.id)
         stock = stock_info.get("stock_on_hand", 0)
         if stock < STOCK_THRESHOLD:
             continue
-        promotion = promo_by_product.get(product_id_str) or _promotion_for_product(db, active_promos, product, promo_by_product)
+        promotion = promo_by_product.get(product_id_str) or _promotion_for_product(active_promos, product, promo_by_product)
         item = _build_item(product.id, ranking, stock, promotion, cold_boost=True)
         selected_items.append(item)
         selected_ids.add(product_id_str)
@@ -233,12 +239,12 @@ def build_exposure(
             )
         )
 
-    db.commit()
+    await db.commit()
     return payload
 
 
-def get_exposure(
-    db: Session,
+async def get_exposure(
+    db: AsyncSession,
     context: str,
     user_id: Optional[str],
     category_id: Optional[UUID] = None,
@@ -248,25 +254,25 @@ def get_exposure(
     cached = _cache.get(cache_key)
     if cached:
         return ExposureResponse(**cached)
-    payload = build_exposure(db, context, user_id, category_id, limit)
+    payload = await build_exposure(db, context, user_id, category_id, limit)
     return ExposureResponse(**payload)
 
 
-def clear_cache(db: Session, context: Optional[str] = None, user_id: Optional[str] = None, category_id: Optional[UUID] = None) -> None:
+async def clear_cache(db: AsyncSession, context: Optional[str] = None, user_id: Optional[str] = None, category_id: Optional[UUID] = None) -> None:
     if context:
         cache_key = _cache_key(context, user_id, category_id)
         _cache.clear(cache_key)
         slot_context = _slot_context(context, category_id)
-        db.execute(
+        await db.execute(
             delete(ExposureSlot)
             .where(ExposureSlot.context == slot_context)
             .where(ExposureSlot.user_id == user_id)
         )
-        db.commit()
+        await db.commit()
     else:
         _cache.clear()
-        db.execute(delete(ExposureSlot))
-        db.commit()
+        await db.execute(delete(ExposureSlot))
+        await db.commit()
 
 
 

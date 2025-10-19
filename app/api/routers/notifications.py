@@ -8,7 +8,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.api import deps
 from app.api.deps import get_current_user
 from app.core.notification_manager import manager as ws_manager
-from app.db.operations import run_sync
 from app.db.session_async import get_async_db
 from app.models.user import User
 from app.schemas.notification import NotificationRead, NotificationUpdate
@@ -26,7 +25,8 @@ async def list_notifications(
     db: AsyncSession = Depends(get_async_db),
     current_user: User = Security(get_current_user, scopes=["users:me"]),
 ):
-    return await run_sync(db, notification_service.list_notifications, current_user, limit, offset)
+    notifications = await notification_service.list_notifications(db, current_user, limit, offset)
+    return [NotificationRead.model_validate(n, from_attributes=True) for n in notifications]
 
 
 @router.patch("/{notification_id}", response_model=NotificationRead)
@@ -37,7 +37,7 @@ async def mark_notification(
     current_user: User = Security(get_current_user, scopes=["users:me"]),
 ):
     try:
-        notif = await run_sync(db, notification_service.mark_read, notification_id, current_user, payload)
+        notif = await notification_service.mark_read(db, notification_id, current_user, payload)
         await db.commit()
     except ServiceError:
         await db.rollback()
@@ -45,8 +45,7 @@ async def mark_notification(
     except Exception:
         await db.rollback()
         raise
-    await db.refresh(notif)
-    return notif
+    return NotificationRead.model_validate(notif, from_attributes=True)
 
 
 @router.websocket("/ws")

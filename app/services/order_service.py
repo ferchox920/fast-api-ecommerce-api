@@ -8,7 +8,6 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
-from app.db.operations import run_sync
 from app.models.cart import Cart, CartStatus
 from app.models.order import (
     Order,
@@ -185,10 +184,9 @@ async def create_order(db: AsyncSession, current_user_id: str | None, payload: O
     db.add(order)
     await db.flush()
 
-    await run_sync(db, notification_service.notify_new_order, order)
-    await run_sync(
+    await notification_service.notify_new_order(db, order)
+    await notification_service.notify_order_status(
         db,
-        notification_service.notify_order_status,
         order,
         title="Orden creada",
         message="Tu orden ha sido creada y está pendiente de pago.",
@@ -241,9 +239,8 @@ async def create_order_from_cart(db: AsyncSession, cart: Cart) -> Order:
     db.add(order)
     await db.flush()
 
-    await run_sync(
+    await notification_service.notify_order_status(
         db,
-        notification_service.notify_order_status,
         order,
         title="Pago acreditado",
         message="Tu pago fue recibido y la orden está confirmada.",
@@ -272,9 +269,8 @@ async def set_status_paid(db: AsyncSession, order: Order) -> Order:
     db.add(order)
     await db.flush()
 
-    await run_sync(
+    await notification_service.notify_order_status(
         db,
-        notification_service.notify_order_status,
         order,
         title="Orden pagada",
         message="Tu orden ha sido pagada correctamente.",
@@ -303,9 +299,8 @@ async def cancel_order(db: AsyncSession, order: Order) -> Order:
     db.add(order)
     await db.flush()
 
-    await run_sync(
+    await notification_service.notify_order_status(
         db,
-        notification_service.notify_order_status,
         order,
         title="Orden cancelada",
         message="Tu orden ha sido cancelada.",
@@ -347,9 +342,8 @@ async def fulfill_order(db: AsyncSession, order: Order, payload: ShipmentCreate 
     db.add(order)
     await db.flush()
 
-    await run_sync(
+    await notification_service.notify_order_status(
         db,
-        notification_service.notify_order_status,
         order,
         title="Orden enviada",
         message="Tu orden fue despachada, revisa el seguimiento disponible.",

@@ -8,7 +8,7 @@ from fastapi import HTTPException, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.db.operations import flush_async, refresh_async, run_sync
+from app.db.operations import flush_async, refresh_async
 from app.models.promotion import Promotion, PromotionStatus, PromotionType
 from app.schemas.promotion import PromotionCreate, PromotionUpdate
 from app.services import notification_service
@@ -93,7 +93,7 @@ async def activate_promotion(db: AsyncSession, promotion_id: UUID) -> Promotion:
     db.add(promotion)
     await flush_async(db, promotion)
     await refresh_async(db, promotion)
-    await run_sync(db, notification_service.notify_new_promotion, promotion)
+    await notification_service.notify_new_promotion(db, promotion)
     emit_promotion_event(
         "promotion_start",
         {
