@@ -27,6 +27,8 @@ CACHE_TTL = getattr(settings, "EXPOSURE_CACHE_TTL", 600)
 _cache = ExposureCache(ttl_seconds=CACHE_TTL)
 
 
+# TODO(observability): agregar métricas 'exposure_hit_ratio', 'ab_variant_conversion'.
+# INTEGRATION(AB): feature flag 'exposure_weights' por cohorte.
 def _cache_key(context: str, user_id: Optional[str], category_id: Optional[UUID]) -> str:
     cat_component = str(category_id) if category_id else "all"
     return f"{context}:{user_id or 'anon'}:{cat_component}"

@@ -12,8 +12,6 @@ from app.services import inventory_service
 from app.services.exceptions import ServiceError
 from app.schemas.purchase import POCreate, POLineCreate, POReceivePayload  # <-- tus schemas reales
 from sqlalchemy import func, select
-from app.services import product_service
-
 def _as_uuid(value: str, field: str) -> uuid.UUID:
     try:
         return uuid.UUID(str(value))
@@ -115,7 +113,6 @@ def receive_po(db: Session, po: PurchaseOrder, payload: POReceivePayload) -> Pur
         variant = db.get(ProductVariant, line.variant_id)
         reason = payload.reason or f"PO {po.id}"
         try:
-            # Asumimos que product_service.receive_stock llama a inventory_service.receive_stock
             inventory_service.receive_stock(db, variant, r.quantity, reason)
         except ServiceError as e:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))

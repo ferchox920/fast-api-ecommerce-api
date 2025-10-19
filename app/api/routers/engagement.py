@@ -1,4 +1,4 @@
-from datetime import date, datetime
+from datetime import date, datetime, timezone
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, Query, status
@@ -11,14 +11,15 @@ from app.services import engagement_service
 router = APIRouter(prefix="/events", tags=["engagement"])
 
 
-# INTEGRATION: Frontend tracking enviar· POST /events con {event_type, product_id, user_id, ts, metadata}.
+# INTEGRATION: Frontend tracking enviar√° POST /events con {event_type, product_id, user_id, ts, metadata}.
 @router.post("", status_code=status.HTTP_202_ACCEPTED, response_model=ProductEngagementRead)
 def ingest_event(payload: EventCreate, db: Session = Depends(get_db)):
+    # INTEGRATION(security): rate limit IP/user en /events; firmar webhooks internos.
     record = engagement_service.record_event(db, payload)
     if record is None:
         return ProductEngagementRead(
             product_id=payload.product_id,
-            date=payload.timestamp.date() if payload.timestamp else datetime.utcnow().date(),
+            date=payload.timestamp.date() if payload.timestamp else datetime.now(timezone.utc).date(),
             views=0,
             clicks=0,
             carts=0,

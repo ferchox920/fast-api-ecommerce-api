@@ -1,16 +1,21 @@
 from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
 
+from app.core.config import settings
 from app.db.session import get_db
 from app.services import scoring_service
+from app.tasks.scoring import run_scoring_task
 
 router = APIRouter(prefix="/internal/scoring", tags=["scoring"], include_in_schema=False)
 
 
 @router.post("/run")
 def run_scoring(db: Session = Depends(get_db)):
-    result = scoring_service.run_scoring(db)
-    return result
+    if settings.CELERY_TASK_ALWAYS_EAGER:
+        return scoring_service.run_scoring(db)
+    async_result = run_scoring_task.delay()
+    outcome = async_result.get(timeout=settings.TASK_RESULT_TIMEOUT)
+    return outcome
 
 
 @router.get("/rankings")

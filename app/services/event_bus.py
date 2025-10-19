@@ -1,36 +1,22 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
-from dataclasses import dataclass
-from typing import List, Dict, Any
+from typing import Any
 
-
-@dataclass
-class EventRecord:
-    name: str
-    payload: Dict[str, Any]
+from app.core.celery_app import celery_app
+from app.core.config import settings
 
 
-_PROMOTION_EVENTS: List[EventRecord] = []
-_LOYALTY_EVENTS: List[EventRecord] = []
+def emit_promotion_event(name: str, payload: dict[str, Any]) -> None:
+    """Publish promotion events through the message broker."""
+    task = celery_app.tasks.get("events.promotion")
+    if task is None:
+        raise RuntimeError("Promotion event task not registered")
+    task.apply_async((name, payload), queue=settings.PROMOTION_EVENTS_QUEUE, ignore_result=True)
 
 
-def emit_promotion_event(name: str, payload: Dict[str, Any]) -> None:
-    """Queue promotion events to be consumed by adapters.
-
-    # INTEGRATION: Notificaciones (email/WS) escucharán 'promotion_start'.
-    # TODO: reemplazar por broker real (Kafka/Rabbit) con compaction.
-    """
-    _PROMOTION_EVENTS.append(EventRecord(name=name, payload=payload))
-
-
-def emit_loyalty_event(name: str, payload: Dict[str, Any]) -> None:
-    """Queue loyalty events to be consumed by adapters."""
-    _LOYALTY_EVENTS.append(EventRecord(name=name, payload=payload))
-
-
-def get_promotion_events() -> List[EventRecord]:
-    return list(_PROMOTION_EVENTS)
-
-
-def get_loyalty_events() -> List[EventRecord]:
-    return list(_LOYALTY_EVENTS)
+def emit_loyalty_event(name: str, payload: dict[str, Any]) -> None:
+    """Publish loyalty events through the message broker."""
+    task = celery_app.tasks.get("events.loyalty")
+    if task is None:
+        raise RuntimeError("Loyalty event task not registered")
+    task.apply_async((name, payload), queue=settings.LOYALTY_EVENTS_QUEUE, ignore_result=True)

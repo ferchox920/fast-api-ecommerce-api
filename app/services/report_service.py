@@ -2,11 +2,12 @@
 from datetime import datetime, timedelta, UTC
 from sqlalchemy.orm import Session
 from sqlalchemy import (
-    func, select, text, and_, or_, column, cast, String
+    func, select, and_, or_, cast, String
 )
 
 # Modelos y Schemas
 from app.models.product import Product, ProductVariant
+from app.models.inventory import InventoryMovement, MovementKind
 from app.models.purchase import PurchaseOrder, PurchaseOrderLine
 from app.schemas.report import (
     SalesSummary, TopSeller, SalesReport,
@@ -30,23 +31,17 @@ def _norm_uuid_sql(expr):
 def get_sales_report(db: Session, days: int = 30) -> SalesReport:
     now_utc = datetime.now(UTC)
     start_date = now_utc - timedelta(days=days)
-    start_date_iso = start_date.isoformat(timespec="seconds")
-
-    # columnas tipadas para la tabla textual
-    vcol = column("variant_id", String)
-    qcol = column("quantity")
 
     sales_stmt = (
         select(
-            vcol.label("variant_id"),
-            func.sum(qcol).label("units_sold"),
+            InventoryMovement.variant_id.label("variant_id"),
+            func.sum(InventoryMovement.quantity).label("units_sold"),
         )
-        .select_from(text("inventory_movements"))
         .where(
-            text("type = 'sale'"),
-            text("created_at >= :start_date"),
+            InventoryMovement.type == MovementKind.SALE,
+            InventoryMovement.created_at >= start_date,
         )
-        .group_by(vcol)
+        .group_by(InventoryMovement.variant_id)
         .cte("sales_data")
     )
 
@@ -69,7 +64,7 @@ def get_sales_report(db: Session, days: int = 30) -> SalesReport:
         .order_by(sales_stmt.c.units_sold.desc())
     )
 
-    rows = db.execute(stmt, {"start_date": start_date_iso}).mappings().all()
+    rows = db.execute(stmt).mappings().all()
     top_sellers = [
         TopSeller(
             product_id=row["product_id"],
@@ -87,9 +82,11 @@ def get_sales_report(db: Session, days: int = 30) -> SalesReport:
     total_sales_transactions = (
         db.execute(
             select(func.count())
-            .select_from(text("inventory_movements"))
-            .where(text("type = 'sale'"), text("created_at >= :start_date")),
-            {"start_date": start_date_iso},
+            .select_from(InventoryMovement)
+            .where(
+                InventoryMovement.type == MovementKind.SALE,
+                InventoryMovement.created_at >= start_date,
+            )
         ).scalar_one_or_none()
         or 0
     )
@@ -255,23 +252,17 @@ def get_inventory_rotation_report(db: Session, days: int = 30) -> InventoryRotat
     """
     now_utc = datetime.now(UTC)
     start_date = now_utc - timedelta(days=days)
-    start_date_iso = start_date.isoformat(timespec="seconds")
-
-    # columnas tipadas para la tabla textual
-    vcol = column("variant_id", String)
-    qcol = column("quantity")
 
     sales_in_period = (
         select(
-            vcol.label("variant_id"),
-            func.sum(qcol).label("units_sold"),
+            InventoryMovement.variant_id.label("variant_id"),
+            func.sum(InventoryMovement.quantity).label("units_sold"),
         )
-        .select_from(text("inventory_movements"))
         .where(
-            text("type = 'sale'"),
-            text("created_at >= :start_date"),
+            InventoryMovement.type == MovementKind.SALE,
+            InventoryMovement.created_at >= start_date,
         )
-        .group_by(vcol)
+        .group_by(InventoryMovement.variant_id)
         .cte("sales_in_period")
     )
 
@@ -297,7 +288,7 @@ def get_inventory_rotation_report(db: Session, days: int = 30) -> InventoryRotat
         ProductVariant.stock_on_hand.desc(),
     )
 
-    rows = db.execute(stmt, {"start_date": start_date_iso}).mappings().all()
+    rows = db.execute(stmt).mappings().all()
 
     items = []
     for r in rows:

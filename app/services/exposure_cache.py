@@ -1,14 +1,13 @@
 from __future__ import annotations
 
 from datetime import timedelta
-from typing import Optional
+from typing import Optional, Any
 import time
+import importlib
 
-from datetime import timedelta
-from typing import Optional
-
+redis: Any | None
 try:
-    import redis
+    redis = importlib.import_module("redis")
 except ImportError:  # pragma: no cover - redis optional
     redis = None
 

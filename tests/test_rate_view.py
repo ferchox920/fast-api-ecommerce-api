@@ -1,7 +1,12 @@
 import uuid
 import pytest
 from httpx import AsyncClient
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
+
+
+def _utc_iso(dt: datetime | None = None) -> str:
+    value = dt or datetime.now(timezone.utc)
+    return value.isoformat().replace("+00:00", "Z")
 
 
 async def _create_product_with_variant(client: AsyncClient, admin_token: str):
@@ -64,7 +69,7 @@ async def test_rate_view_pipeline(client: AsyncClient, admin_token: str, user_to
                 "event_type": "view",
                 "product_id": product["id"],
                 "user_id": user_id,
-                "timestamp": datetime.utcnow().isoformat() + "Z",
+                "timestamp": _utc_iso(),
             },
         )
         assert resp.status_code == 202
@@ -75,7 +80,7 @@ async def test_rate_view_pipeline(client: AsyncClient, admin_token: str, user_to
             "event_type": "purchase",
             "product_id": product["id"],
             "user_id": user_id,
-            "timestamp": datetime.utcnow().isoformat() + "Z",
+            "timestamp": _utc_iso(),
             "price": 120.5,
             "metadata": {"quantity": 1},
         },
@@ -107,8 +112,8 @@ async def test_rate_view_pipeline(client: AsyncClient, admin_token: str, user_to
             "type": "product",
             "criteria": {},
             "benefits": {"discount_percent": 10},
-            "start_at": (datetime.utcnow() - timedelta(minutes=1)).isoformat() + "Z",
-            "end_at": (datetime.utcnow() + timedelta(days=5)).isoformat() + "Z",
+            "start_at": _utc_iso(datetime.now(timezone.utc) - timedelta(minutes=1)),
+            "end_at": _utc_iso(datetime.now(timezone.utc) + timedelta(days=5)),
         },
         headers={"Authorization": f"Bearer {admin_token}"},
     )

@@ -1,23 +1,48 @@
-# app/schemas/inventory.py
-from pydantic import BaseModel
-from pydantic.config import ConfigDict
-from typing import Literal
-from uuid import UUID
-from datetime import datetime
+import uuid
+from datetime import datetime, timezone
+from enum import Enum
+from typing import TYPE_CHECKING
 
-MovementType = Literal["receive", "adjust", "reserve", "release", "sale"]
+from sqlalchemy import DateTime, Enum as SqlEnum, ForeignKey, Integer, String, Index
+from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy.orm import Mapped, mapped_column, relationship
 
-class MovementCreate(BaseModel):
-    type: MovementType
-    quantity: int  # Field(gt=0) si no quieres permitir <=0 desde la API
-    reason: str | None = None
+from app.db.session import Base
 
-class MovementRead(BaseModel):
-    id: UUID
-    type: MovementType
-    quantity: int
-    reason: str | None
-    created_at: datetime
 
-    # Pydantic v2: evita el warning y habilita from_attributes
-    model_config = ConfigDict(from_attributes=True)
+class MovementKind(str, Enum):
+    RECEIVE = "receive"
+    ADJUST = "adjust"
+    RESERVE = "reserve"
+    RELEASE = "release"
+    SALE = "sale"
+
+
+def _utcnow() -> datetime:
+    return datetime.now(timezone.utc)
+
+
+class InventoryMovement(Base):
+    __tablename__ = "inventory_movements"
+    __table_args__ = (
+        Index("ix_inventory_movements_variant_created", "variant_id", "created_at"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    variant_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("product_variants.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    type: Mapped[MovementKind] = mapped_column(SqlEnum(MovementKind, name="inventory_movement_type"), nullable=False)
+    quantity: Mapped[int] = mapped_column(Integer, nullable=False)
+    reason: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow, nullable=False)
+
+    if TYPE_CHECKING:  # pragma: no cover - for typing only
+        from app.models.product import ProductVariant
+        variant: Mapped["ProductVariant"]
+    else:
+        variant = relationship("ProductVariant", back_populates="movements")
+

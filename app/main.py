@@ -26,6 +26,7 @@ from app.api.routers import (
     reports,
     users,
     variants,
+    wishes,
 )
 
 # --- Models registration (necesario para que Alembic los detecte) ---
@@ -40,6 +41,7 @@ import app.models.notification      # noqa: F401
 import app.models.engagement        # noqa: F401
 import app.models.promotion         # noqa: F401
 import app.models.loyalty           # noqa: F401
+import app.models.wish              # noqa: F401
 
 # --- Metadatos de la API para la documentación ---
 TAGS_METADATA = [
@@ -60,6 +62,7 @@ TAGS_METADATA = [
     {"name": "exposure", "description": "Motor de exposicion equilibrada de productos."},
     {"name": "promotions", "description": "Promociones dinamicas."},
     {"name": "loyalty", "description": "Sistema de fidelizacion."},
+    {"name": "wishes", "description": "Lista de deseos y alertas de promociones."},
     {"name": "analytics", "description": "Paneles y metricas administrativas."},
     {"name": "cart", "description": "Carritos de compra para usuarios e invitados."},
     {"name": "reports", "description": "Metricas y reportes de negocio."},
@@ -119,6 +122,7 @@ app.include_router(scoring.router, prefix=settings.API_V1_STR)
 app.include_router(notifications.router, prefix=settings.API_V1_STR)
 app.include_router(analytics.router, prefix=settings.API_V1_STR)
 app.include_router(reports.router, prefix=settings.API_V1_STR)
+app.include_router(wishes.router, prefix=settings.API_V1_STR)
 
 
 # --- Configuración personalizada de OpenAPI ---

@@ -19,6 +19,7 @@ from . import reports
 from . import scoring
 from . import users
 from . import variants
+from . import wishes
 
 __all__ = [
     "admin",
@@ -42,5 +43,5 @@ __all__ = [
     "scoring",
     "users",
     "variants",
+    "wishes",
 ]
-

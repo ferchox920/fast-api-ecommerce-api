@@ -1,5 +1,5 @@
 import uuid
-from datetime import datetime, date as dt_date
+from datetime import datetime, date as dt_date, timezone
 from decimal import Decimal
 
 from sqlalchemy import Date, Integer, Numeric, String, DateTime, ForeignKey, JSON, UniqueConstraint, Index
@@ -7,6 +7,10 @@ from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.session import Base
+
+
+def _utcnow() -> datetime:
+    return datetime.now(timezone.utc)
 
 
 class ProductEngagementDaily(Base):
@@ -26,7 +30,7 @@ class ProductEngagementDaily(Base):
     purchases: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     revenue: Mapped[Decimal] = mapped_column(Numeric(14, 2), nullable=False, default=Decimal("0"))
 
-    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=_utcnow, onupdate=_utcnow)
 
 
 class CustomerEngagementDaily(Base):
@@ -46,7 +50,7 @@ class CustomerEngagementDaily(Base):
     purchases: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     points_earned: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
 
-    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=_utcnow, onupdate=_utcnow)
 
 
 class ProductRanking(Base):
@@ -58,7 +62,7 @@ class ProductRanking(Base):
     profit_score: Mapped[Decimal] = mapped_column(Numeric(5, 4), nullable=False, default=Decimal("0"))
     freshness_score: Mapped[Decimal] = mapped_column(Numeric(5, 4), nullable=False, default=Decimal("0"))
     exposure_score: Mapped[Decimal] = mapped_column(Numeric(5, 4), nullable=False, default=Decimal("0"))
-    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow, index=True)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=_utcnow, onupdate=_utcnow, index=True)
 
 
 class ExposureSlot(Base):

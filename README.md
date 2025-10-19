@@ -58,6 +58,12 @@ Backend modular para un e-commerce moderno construido con **FastAPI**. El proyec
 - `/admin/analytics/overview` resume ingresos, mix de exposicion y distribucion por niveles.
 - Servicios auxiliares para dashboards y futuros reportes.
 
+#### Observabilidad y seguridad
+- Métricas Prometheus para `/events` (latencia, descartes por rate limit), `/exposure` (latencia, cache hit ratio, CTR por slot), promociones (revenue lift) y loyalty (tasa de upgrade).
+- Logs estructurados JSON con `request_id`, hash de `user_id`, `product_id`, `promotion_id` y metadata clave, enviados al agregador central con protecciones PII.
+- Trazas correlacionadas vía OpenTelemetry (W3C Trace Context) entre FastAPI, workers y adaptadores (PostgreSQL, Redis, colas).
+- Controles de seguridad: rate limiting IP/usuario en `/events`, auditoría de cambios de promociones, detección de bursts sospechosos y webhooks firmados con mTLS interno.
+
 ---
 
 ### Arquitectura
@@ -120,6 +126,38 @@ pytest --maxfail=1 --disable-warnings -q
 
 ---
 
+### Snippet base para exponer mixes
+
+```python
+# app/services/exposure_service.py
+from datetime import datetime, timedelta, timezone
+from fastapi import APIRouter, Depends
+
+router = APIRouter(prefix="/exposure", tags=["exposure"])
+
+@router.get("")
+def get_exposure(context: str, user_id: str | None = None, category_id: str | None = None):
+    """
+    INTEGRATION: Consumido por FE para renderizar carruseles/listas.
+    INTEGRATION: 'reason' y 'badges' guían UI (chips/etiquetas).
+    INTEGRATION: Cache TTL coordinado con Redis (ver config.EXPOSURE_TTL_SEC).
+
+    TODO: leer product_rankings (+ ajustes categoría/temporada)
+    TODO: aplicar reglas (no repetir, impulso fríos, cap por categoría)
+    TODO: mezclar 70/30 (configurable), escribir a exposure_slots, setear TTL
+    TODO: instrumentar métricas (latencia, cache_hit, items_served)
+    """
+    expires_at = datetime.now(timezone.utc) + timedelta(minutes=10)
+    # stub de respuesta inicial
+    return {
+        "context": context,
+        "mix": [],
+        "expires_at": expires_at.isoformat().replace("+00:00", "Z"),
+    }
+```
+
+---
+
 ### Notas de integracion
 
 - **Eventos**: `POST /events` se alinea con el tracker del frontend (dataLayer/SDK). El backend de checkout emite `purchase`.
@@ -131,6 +169,17 @@ pytest --maxfail=1 --disable-warnings -q
 ---
 
 ### Roadmap inmediato
+
+- **Fase 1 — Ingesta & Métricas**: POST `/events`, cola `events` y agregador horario hacia `product_engagement_daily` con métricas básicas.
+- **Fase 2 — Scoring & Exposure básico**: job horario, upsert en `product_rankings`, `/exposure` con cache Redis y reglas mínimas.
+- **Fase 3 — Promos**: CRUD + elegibilidad + integración checkout (adapter stub) con auditoría de cambios.
+- **Fase 4 — Loyalty**: perfiles, niveles, upgrades automáticos y eventos `loyalty_upgrade`.
+- **Fase 5 — Observabilidad + A/B**: dashboards, alertas y experimentos de pesos (70/30 vs variantes) con métricas `exposure_hit_ratio`, `ab_variant_conversion`.
+
+- Comentarios guía para el código:
+  - `# TODO(observability): agregar métricas 'exposure_hit_ratio', 'ab_variant_conversion'.`
+  - `# INTEGRATION(security): rate limit IP/user en /events; firmar webhooks internos.`
+  - `# INTEGRATION(AB): feature flag 'exposure_weights' por cohorte.`
 
 - Conectar el bus de eventos a Kafka/Rabbit para desacoplar adaptadores.
 - Obtener margen/stock reales desde ERP para el scoring.

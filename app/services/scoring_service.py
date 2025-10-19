@@ -16,12 +16,11 @@ from app.core.config import settings
 from app.models.engagement import ProductEngagementDaily, ProductRanking
 from app.services import catalog_client
 
-# INTEGRATION: parámetros globales 70/30 configurables en tabla settings o env vars.
-POPULARITY_WEIGHT = getattr(settings, "EXPOSURE_POPULARITY_WEIGHT", 0.7)
-STRATEGIC_WEIGHT = getattr(settings, "EXPOSURE_STRATEGIC_WEIGHT", 0.3)
-WINDOW_DAYS = getattr(settings, "SCORING_WINDOW_DAYS", 14)
-HALF_LIFE_DAYS = getattr(settings, "SCORING_HALF_LIFE_DAYS", 3)
-FRESHNESS_HALF_LIFE = getattr(settings, "SCORING_FRESHNESS_HALF_LIFE", 1.5)
+POPULARITY_WEIGHT = settings.EXPOSURE_POPULARITY_WEIGHT
+STRATEGIC_WEIGHT = settings.EXPOSURE_STRATEGIC_WEIGHT
+WINDOW_DAYS = settings.SCORING_WINDOW_DAYS
+HALF_LIFE_DAYS = settings.SCORING_HALF_LIFE_DAYS
+FRESHNESS_HALF_LIFE = settings.SCORING_FRESHNESS_HALF_LIFE
 
 
 class ScoringResult(Dict[str, float]):
@@ -43,19 +42,22 @@ def _freshness_factor(age_days: float) -> float:
 def _load_engagement(db: Session, window_days: int):
     today = datetime.now(timezone.utc).date()
     start_date = today - timedelta(days=window_days - 1)
-    records = db.execute(
-        select(ProductEngagementDaily)
-        .where(ProductEngagementDaily.date >= start_date)
-    ).scalars().all()
-    grouped: dict[str, dict[str, float]] = defaultdict(lambda: {
-        "views": 0.0,
-        "clicks": 0.0,
-        "carts": 0.0,
-        "purchases": 0.0,
-        "revenue": Decimal("0"),
-        "freshness": 0.0,
-        "latest_age": float("inf"),
-    })
+    records = (
+        db.execute(select(ProductEngagementDaily).where(ProductEngagementDaily.date >= start_date))
+        .scalars()
+        .all()
+    )
+    grouped: dict[str, dict[str, float]] = defaultdict(
+        lambda: {
+            "views": 0.0,
+            "clicks": 0.0,
+            "carts": 0.0,
+            "purchases": 0.0,
+            "revenue": Decimal("0"),
+            "freshness": 0.0,
+            "latest_age": float("inf"),
+        }
+    )
 
     for record in records:
         age_days = float((today - record.date).days)
@@ -84,7 +86,6 @@ def run_scoring(db: Session, window_days: int = WINDOW_DAYS) -> dict:
     product_metrics = {}
     for product_id, metrics in engagements.items():
         product_uuid = UUIDType(product_id)
-        # Popularidad pondera interacciones con mayor peso en compras.
         popularity = (
             metrics["views"] * 0.2
             + metrics["clicks"] * 0.3
@@ -150,9 +151,5 @@ def run_scoring(db: Session, window_days: int = WINDOW_DAYS) -> dict:
 
 
 def get_latest_rankings(db: Session, limit: int = 20):
-    stmt = (
-        select(ProductRanking)
-        .order_by(ProductRanking.exposure_score.desc())
-        .limit(limit)
-    )
+    stmt = select(ProductRanking).order_by(ProductRanking.exposure_score.desc()).limit(limit)
     return db.execute(stmt).scalars().all()

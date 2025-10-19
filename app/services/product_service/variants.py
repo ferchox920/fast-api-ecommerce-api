@@ -2,9 +2,18 @@ from sqlalchemy.orm import Session
 from fastapi import HTTPException
 from sqlalchemy.exc import IntegrityError
 
-from app.models.product import ProductVariant
+from app.models.product import ProductVariant, Product
 from app.schemas.product import ProductVariantCreate, ProductVariantUpdate
 from .utils import as_uuid
+
+
+def list_variants_for_product(db: Session, product: Product) -> list[ProductVariant]:
+    return (
+        db.query(ProductVariant)
+        .filter(ProductVariant.product_id == product.id)
+        .order_by(ProductVariant.size_label, ProductVariant.color_name)
+        .all()
+    )
 
 def add_variant(db: Session, product_id: str, data: ProductVariantCreate) -> ProductVariant:
     if (

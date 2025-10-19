@@ -2,8 +2,12 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 from sqlalchemy import String, Boolean, Numeric, ForeignKey, DateTime, func, Integer, Text
 from sqlalchemy.dialects.postgresql import UUID
 import uuid
+from typing import TYPE_CHECKING
 
 from app.db.session import Base
+
+if TYPE_CHECKING:  # pragma: no cover
+    from app.models.inventory import InventoryMovement
 
 
 # --- Clasificación ---
@@ -112,6 +116,12 @@ class ProductVariant(Base):
     updated_at = mapped_column(DateTime(timezone=True), onupdate=func.now())
 
     product = relationship(Product, back_populates="variants")
+    movements = relationship(
+        "InventoryMovement",
+        back_populates="variant",
+        cascade="all, delete-orphan",
+        order_by="InventoryMovement.created_at.desc()",
+    )
 
 
 # --- Imágenes del producto ---

@@ -10,7 +10,7 @@ if str(ROOT_DIR) not in sys.path:
 import pytest
 import pytest_asyncio
 import httpx
-from sqlalchemy import create_engine, text, text, text
+from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker, Session
 from typing import Generator
 
@@ -50,10 +50,6 @@ def db_session() -> Generator[Session, any, None]:
     connection = sync_engine.connect()
     transaction = connection.begin()
     session = TestingSessionLocal(bind=connection)
-
-    # Asegurarse de que la tabla de movimientos se recree en cada test
-    # para recoger los cambios en el schema que no maneja Alembic/SQLAlchemy.
-    session.execute(text("DROP TABLE IF EXISTS inventory_movements"))
 
     try:
         yield session

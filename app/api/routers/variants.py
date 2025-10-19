@@ -6,7 +6,7 @@ from app.db.session import get_db
 from app.api.deps import get_current_admin
 from app.models.product import Product, ProductVariant
 from app.schemas.variant import VariantRead, VariantCreate, VariantUpdate
-from app.services import variant_service
+from app.services.product_service import variants as variant_service
 
 router = APIRouter(prefix="/products", tags=["variants"])
 
