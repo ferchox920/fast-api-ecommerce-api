@@ -72,6 +72,8 @@ class Token(BaseModel):
 class TokenPayload(BaseModel):
     sub: str | None = None
     exp: Optional[int] = None
+    iat: Optional[int] = None
+    jti: Optional[str] = None
     type: Optional[str] = None                 # "access" | "refresh" | "verify_email"
     scopes: Optional[List[str]] = None         # scopes opcionales
 

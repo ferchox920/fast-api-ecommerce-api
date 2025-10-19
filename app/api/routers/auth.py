@@ -3,12 +3,14 @@ from __future__ import annotations
 import uuid
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from fastapi.security import OAuth2PasswordRequestForm
 from jose import JWTError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
+from app.core.logging import get_logger, security_alert
+from app.core.metrics import record_login_attempt
 from app.core.security import (
     create_access_token,
     create_email_verification_token,
@@ -19,7 +21,7 @@ from app.core.security import (
 from app.db.operations import commit_async
 from app.db.session_async import get_async_db
 from app.models.user import User
-from app.schemas.auth import RefreshRequest, TokenPair, TokenRefresh, VerifyEmailRequest
+from app.schemas.auth import OAuthUpsertRequest, RefreshRequest, TokenPair, TokenRefresh, VerifyEmailRequest
 from app.schemas.user import UserRead
 from app.services.email_service import send_verification_email
 from app.services.user_service import (
@@ -31,10 +33,22 @@ from app.services.user_service import (
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
+auth_logger = get_logger("app.auth")
+
+
+def _client_ip(request: Request | None) -> str | None:
+    if request is None:
+        return None
+    forwarded = request.headers.get("x-forwarded-for")
+    if forwarded:
+        return forwarded.split(",")[0].strip()
+    client = request.client
+    return client.host if client else None
+
 
 def _get_user_scopes(user: User) -> list[str]:
     """Centraliza la lógica de asignación de scopes según el rol del usuario."""
-    user_scopes = ["users:me"]
+    user_scopes = ["users:me", "reports:read"]
     if user.is_superuser:
         user_scopes.extend(
             ["admin", "products:read", "products:write", "purchases:read", "purchases:write"]
@@ -46,16 +60,28 @@ def _get_user_scopes(user: User) -> list[str]:
 
 @router.post("/login", response_model=TokenPair)
 async def login(
+    request: Request,
     form_data: OAuth2PasswordRequestForm = Depends(),
     db: AsyncSession = Depends(get_async_db),
 ):
     user = await authenticate(db, form_data.username, form_data.password)
     if not user:
+        record_login_attempt("failure")
+        security_alert(
+            "Failed login attempt",
+            email=form_data.username,
+            client_ip=_client_ip(request),
+        )
+        auth_logger.warning(
+            "Failed login attempt",
+            extra={"email": form_data.username, "client_ip": _client_ip(request)},
+        )
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Incorrect email or password",
         )
 
+    record_login_attempt("success")
     user_scopes = _get_user_scopes(user)
     access = create_access_token(subject=user.id, extra={"scopes": user_scopes})
     refresh = create_refresh_token(subject=user.id, extra={"scopes": user_scopes})
@@ -63,6 +89,15 @@ async def login(
     user.last_login_at = datetime.now(timezone.utc)
     db.add(user)
     await commit_async(db)
+
+    auth_logger.info(
+        "User authenticated",
+        extra={
+            "user_id": str(user.id),
+            "email": user.email,
+            "client_ip": _client_ip(request),
+        },
+    )
 
     return {
         "access_token": access,
@@ -80,6 +115,7 @@ async def refresh_token(payload: RefreshRequest):
         user_id = data["sub"]
         token_scopes = data.get("scopes", []) or []
     except (JWTError, KeyError) as exc:
+        security_alert("Refresh token validation failed", reason=str(exc))
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid refresh token",
@@ -130,20 +166,16 @@ async def confirm_email(token: str = Query(...), db: AsyncSession = Depends(get_
 
 
 @router.post("/oauth/upsert", response_model=TokenPair)
-async def oauth_upsert(data: dict, db: AsyncSession = Depends(get_async_db)):
-    required = {"provider", "sub", "email"}
-    if not required.issubset(data):
-        raise HTTPException(status_code=400, detail="Missing provider/sub/email")
-
+async def oauth_upsert(payload: OAuthUpsertRequest, db: AsyncSession = Depends(get_async_db)):
     from app.schemas.user import UserCreateOAuth  # import local para evitar ciclos
 
     user_payload = UserCreateOAuth(
-        email=data["email"],
-        full_name=data.get("full_name"),
-        oauth_provider=data["provider"],
-        oauth_sub=data["sub"],
-        oauth_picture=data.get("picture"),
-        email_verified_from_provider=bool(data.get("email_verified")),
+        email=payload.email,
+        full_name=payload.full_name,
+        oauth_provider=payload.provider,
+        oauth_sub=payload.sub,
+        oauth_picture=payload.picture,
+        email_verified_from_provider=bool(payload.email_verified),
     )
     user = await upsert_oauth_user(db, user_payload)
 

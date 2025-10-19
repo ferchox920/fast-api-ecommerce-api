@@ -3,7 +3,6 @@ from __future__ import annotations
 from fastapi import HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.db.operations import run_sync
 from app.models.order import (
     Order,
     OrderStatus,
@@ -79,16 +78,9 @@ async def handle_mercado_pago_webhook(db: AsyncSession, payload: dict) -> None:
     if not payment_id:
         return
 
-    def _get_payment_id(sync_db):
-        record = (
-            sync_db.query(Payment.id)
-            .filter(Payment.provider_payment_id == str(payment_id))
-            .limit(1)
-            .first()
-        )
-        return record[0] if record else None
-
-    stored_payment_id = await run_sync(db, _get_payment_id)
+    stmt = select(Payment.id).where(Payment.provider_payment_id == str(payment_id)).limit(1)
+    result = await db.execute(stmt)
+    stored_payment_id = result.scalar_one_or_none()
     if not stored_payment_id:
         return
 
@@ -124,3 +116,4 @@ async def handle_mercado_pago_webhook(db: AsyncSession, payload: dict) -> None:
     await db.flush()
     await db.refresh(payment)
     return payment
+from sqlalchemy import select

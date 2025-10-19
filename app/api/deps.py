@@ -1,12 +1,12 @@
 # app/api/deps.py
 from fastapi import Depends, HTTPException, Security, status
 from fastapi.security import OAuth2PasswordBearer, SecurityScopes
-from jose import JWTError, jwt
+from jose import JWTError
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
-from app.core.security import ALGORITHM
-from app.db.operations import run_sync
+from app.core.security import decode_access_token
 from app.db.session_async import get_async_db
 from app.models.user import User
 from app.schemas.user import TokenPayload
@@ -27,6 +27,7 @@ OAUTH_SCOPES = {
     "questions:write": "Permiso para crear/gestionar preguntas de productos.",
     "notifications:read": "Permiso para leer notificaciones.",
     "notifications:write": "Permiso para gestionar notificaciones.",
+    "reports:read": "Permiso para consultar reportes de negocio.",
 }
 
 
@@ -43,7 +44,7 @@ oauth2_scheme_optional = OAuth2PasswordBearer(
 
 
 def _decode_token(token: str) -> tuple[TokenPayload, list[str]]:
-    payload = jwt.decode(token, settings.SECRET_KEY, algorithms=[ALGORITHM])
+    payload = decode_access_token(token)
     token_data = TokenPayload(**payload)
     token_scopes: list[str] = payload.get("scopes", []) or []
     return token_data, token_scopes
@@ -52,6 +53,12 @@ def _decode_token(token: str) -> tuple[TokenPayload, list[str]]:
 def decode_token_no_db(token: str) -> TokenPayload:
     token_data, _ = _decode_token(token)
     return token_data
+
+async def _get_user_by_id(db: AsyncSession, user_id: str | None) -> User | None:
+    if not user_id:
+        return None
+    result = await db.execute(select(User).where(User.id == user_id))
+    return result.scalar_one_or_none()
 
 
 async def get_current_user(
@@ -73,7 +80,7 @@ async def get_current_user(
     if token_data.sub is None:
         raise cred_exc
 
-    user = await run_sync(db, lambda sync_db: sync_db.query(User).filter(User.id == token_data.sub).first())
+    user = await _get_user_by_id(db, token_data.sub)
     if user is None:
         raise cred_exc
 
@@ -104,7 +111,7 @@ async def get_optional_user(
     if token_data.sub is None:
         return None
 
-    return await run_sync(db, lambda sync_db: sync_db.query(User).filter(User.id == token_data.sub).first())
+    return await _get_user_by_id(db, token_data.sub)
 
 
 def get_current_active_user(

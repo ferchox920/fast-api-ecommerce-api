@@ -1,10 +1,13 @@
 ﻿# app/main.py
-from fastapi import FastAPI
+from fastapi import Depends, FastAPI, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.openapi.utils import get_openapi
 
 from app.api.error_handlers import register_exception_handlers
+from app.api.deps import get_current_admin
 from app.core.config import settings
+from app.core.logging import setup_logging
+from app.core.metrics import export_metrics
 from app.api.routers import (
     admin,
     admin_promotions,
@@ -29,6 +32,7 @@ from app.api.routers import (
     variants,
     wishes,
 )
+from app.middleware import ObservabilityMiddleware, PayloadLimitMiddleware, SecurityHeadersMiddleware
 
 # --- Models registration (necesario para que Alembic los detecte) ---
 import app.models.product        # noqa: F401
@@ -69,6 +73,8 @@ TAGS_METADATA = [
     {"name": "reports", "description": "Metricas y reportes de negocio."},
 ]
 
+setup_logging()
+
 app = FastAPI(
     title=settings.PROJECT_NAME,
     version="0.1.0",
@@ -101,6 +107,9 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+app.add_middleware(PayloadLimitMiddleware)
+app.add_middleware(ObservabilityMiddleware)
+app.add_middleware(SecurityHeadersMiddleware)
 
 # --- Routers ---
 app.include_router(auth.router, prefix=settings.API_V1_STR)
@@ -164,6 +173,12 @@ app.openapi = custom_openapi
 @app.get("/", include_in_schema=False)
 def root():
     return {"status": "ok", "docs_url": "/docs", "redoc_url": "/redoc"}
+
+
+@app.get("/metrics", include_in_schema=False)
+def metrics(_: None = Depends(get_current_admin)) -> Response:
+    payload, content_type = export_metrics()
+    return Response(content=payload, media_type=content_type)
 
 
 

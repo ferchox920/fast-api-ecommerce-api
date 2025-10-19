@@ -7,6 +7,7 @@ fastapi
 fixtures
 greenlet
 httpx
+prometheus-client
 passlib[bcrypt]
 psycopg[binary]
 psycopg2-binary

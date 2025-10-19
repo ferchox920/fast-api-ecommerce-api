@@ -25,10 +25,25 @@ class Settings(BaseSettings):
     REFRESH_SECRET_KEY: str | None = None
     DATABASE_URL: str = "sqlite:///./test.db"
     ASYNC_DATABASE_URL: str | None = None
+    REDIS_URL: str | None = None
+    SECRET_KEY_FALLBACKS: list[str] = Field(default_factory=list)
+    REFRESH_SECRET_KEY_FALLBACKS: list[str] = Field(default_factory=list)
+    JWT_BLACKLIST_ENABLED: bool = False
+    JWT_BLACKLIST_TTL_LEEWAY_SECONDS: int = 300
+    LOG_LEVEL: str = "INFO"
+    METRICS_ENABLED: bool = True
+    METRICS_NAMESPACE: str = "fastapi"
+    METRICS_LATENCY_BUCKETS: list[float] = Field(default_factory=lambda: [0.05, 0.1, 0.25, 0.5, 1.0, 2.0, 5.0])
+    STRICT_TRANSPORT_SECURITY: str = "max-age=63072000; includeSubDomains; preload"
+    CONTENT_SECURITY_POLICY: str = "default-src 'self'; frame-ancestors 'none'; object-src 'none'; base-uri 'self'; form-action 'self'"
+    X_FRAME_OPTIONS: str = "DENY"
+    X_CONTENT_TYPE_OPTIONS: str = "nosniff"
+    REFERRER_POLICY: str = "no-referrer"
+    MAX_REQUEST_SIZE_BYTES: int = 2 * 1024 * 1024  # 2MB default
 
     # --- Tokens ---
-    ACCESS_TOKEN_EXPIRE_MINUTES: int = 60
-    REFRESH_TOKEN_EXPIRE_DAYS: int = 15
+    ACCESS_TOKEN_EXPIRE_MINUTES: int = 15
+    REFRESH_TOKEN_EXPIRE_DAYS: int = 7
     VERIFY_TOKEN_EXPIRE_HOURS: int = 24
     ENFORCE_EMAIL_VERIFICATION: bool = True
 
@@ -57,6 +72,8 @@ class Settings(BaseSettings):
     MERCADO_PAGO_FAILURE_URL: str = ""
     MERCADO_PAGO_PENDING_URL: str = ""
     MERCADO_PAGO_WEBHOOK_SECRET: str = ""
+    MERCADO_PAGO_WEBHOOK_TOLERANCE_SECONDS: int = 300
+    MERCADO_PAGO_WEBHOOK_REPLAY_TTL_SECONDS: int = 86400
 
     # --- Exposure engine defaults ---
     EXPOSURE_POPULARITY_WEIGHT: float = 0.7
@@ -66,6 +83,12 @@ class Settings(BaseSettings):
     EXPOSURE_STOCK_THRESHOLD: int = 15
     EXPOSURE_FRESHNESS_THRESHOLD: float = 0.7
     EXPOSURE_CACHE_TTL: int = 600
+
+    # --- Rate limiting ---
+    RATE_LIMIT_REGISTRATION_PER_MINUTE: int = 5
+    RATE_LIMIT_REGISTRATION_WINDOW_SECONDS: int = 60
+    RATE_LIMIT_REPORTS_PER_MINUTE: int = 30
+    RATE_LIMIT_REPORTS_WINDOW_SECONDS: int = 60
 
     # --- Scoring defaults ---
     SCORING_WINDOW_DAYS: int = 14
@@ -85,11 +108,58 @@ class Settings(BaseSettings):
     WISH_QUEUE: str = "wish-events"
     TASK_RESULT_TIMEOUT: int = 30
 
+    @staticmethod
+    def _split_list(value: str | list[str] | None) -> list[str]:
+        if not value:
+            return []
+        if isinstance(value, str):
+            return [item.strip() for item in value.split(",") if item.strip()]
+        return [item for item in value if isinstance(item, str) and item.strip()]
+
+    @staticmethod
+    def _split_float_list(value: str | list[float] | None) -> list[float]:
+        if value is None:
+            return []
+        if isinstance(value, str):
+            items = [item.strip() for item in value.split(",") if item.strip()]
+            floats: list[float] = []
+            for item in items:
+                try:
+                    floats.append(float(item))
+                except ValueError:
+                    continue
+            return floats
+        floats = []
+        for item in value:
+            try:
+                floats.append(float(item))
+            except (TypeError, ValueError):
+                continue
+        return floats
+
+    @field_validator("SECRET_KEY_FALLBACKS", "REFRESH_SECRET_KEY_FALLBACKS", mode="before")
+    @classmethod
+    def validate_fallbacks(cls, value: str | list[str] | None) -> list[str]:
+        return cls._split_list(value)
+
+    @field_validator("METRICS_LATENCY_BUCKETS", mode="before")
+    @classmethod
+    def validate_metric_buckets(cls, value: str | list[float] | None) -> list[float]:
+        floats = cls._split_float_list(value)
+        return floats or cls.model_fields["METRICS_LATENCY_BUCKETS"].default_factory()  # type: ignore[attr-defined]
+
     @field_validator("SECRET_KEY")
     @classmethod
     def validate_secret_key(cls, value: str) -> str:
         if not value or value.lower() == "changeme":
             raise ValueError("SECRET_KEY must be set to a non-default, secure value.")
+        return value
+
+    @field_validator("MAX_REQUEST_SIZE_BYTES")
+    @classmethod
+    def validate_request_size(cls, value: int) -> int:
+        if value <= 0:
+            raise ValueError("MAX_REQUEST_SIZE_BYTES must be positive.")
         return value
 
     @model_validator(mode="after")
