@@ -1,20 +1,17 @@
 from __future__ import annotations
+
 from fastapi import HTTPException
-from sqlalchemy.orm import Session
+from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models.product import ProductVariant, Product
+from app.models.product import Product, ProductVariant
 
 
-def get_variant_effective_price(db: Session, variant: ProductVariant) -> float:
-    """Devuelve el precio aplicable para ventas/carrito.
-
-    Prioriza `price_override` de la variante y cae al precio base del producto.
-    """
-
+async def get_variant_effective_price(db: AsyncSession, variant: ProductVariant) -> float:
+    """Return the price applicable for carts/orders using AsyncSession."""
     if variant.price_override is not None:
         return float(variant.price_override)
 
-    product = db.get(Product, variant.product_id)
+    product = await db.get(Product, variant.product_id)
     if not product:
         raise HTTPException(500, "Variant without product")
 

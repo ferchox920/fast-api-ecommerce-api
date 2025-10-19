@@ -1,26 +1,28 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 from decimal import Decimal
 from typing import Iterable
 from uuid import UUID
 
-from fastapi import HTTPException, status
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.core.celery_app import celery_app
 from app.core.config import settings
+from app.models.notification import NotificationType
 from app.models.promotion import Promotion, PromotionStatus, PromotionType
 from app.models.wish import Wish, WishNotification, WishStatus
+from app.schemas.notification import NotificationCreate
 from app.schemas.wish import WishCreate
 from app.services import notification_service
+from app.services.exceptions import ConflictError, ResourceNotFoundError
 
 
-def _get_wish(db: Session, wish_id: UUID, user_id: str) -> Wish:
-    wish = db.get(Wish, wish_id)
-    if not wish or wish.user_id != user_id:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Wish not found")
-    return wish
+def _enqueue_evaluation(wish_id: str) -> None:
+    task = celery_app.tasks.get("wish.evaluate")
+    if task is None:
+        return
+    task.apply_async(args=[wish_id], queue=settings.WISH_QUEUE, ignore_result=True)
 
 
 def list_user_wishes(db: Session, user_id: str) -> Iterable[Wish]:
@@ -33,7 +35,7 @@ def create_wish(db: Session, user_id: str, payload: WishCreate) -> Wish:
         select(Wish).where(Wish.user_id == user_id, Wish.product_id == payload.product_id)
     ).scalar_one_or_none()
     if existing:
-        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Wish already exists for this product.")
+        raise ConflictError("Wish already exists for this product")
 
     wish = Wish(
         user_id=user_id,
@@ -42,7 +44,7 @@ def create_wish(db: Session, user_id: str, payload: WishCreate) -> Wish:
         notify_discount=payload.notify_discount,
     )
     db.add(wish)
-    db.commit()
+    db.flush()
     db.refresh(wish)
 
     _enqueue_evaluation(str(wish.id))
@@ -50,21 +52,25 @@ def create_wish(db: Session, user_id: str, payload: WishCreate) -> Wish:
 
 
 def delete_wish(db: Session, wish_id: UUID, user_id: str) -> None:
-    wish = _get_wish(db, wish_id, user_id)
+    wish = db.get(Wish, wish_id)
+    if not wish or wish.user_id != user_id:
+        raise ResourceNotFoundError("Wish not found")
     db.delete(wish)
-    db.commit()
 
 
 def record_notification(db: Session, wish: Wish, notification_type: str, message: str) -> WishNotification:
     record = WishNotification(wish_id=wish.id, notification_type=notification_type, message=message)
     db.add(record)
-    db.commit()
+    db.flush()
     db.refresh(record)
     return record
 
 
 def _match_promotions(db: Session, wish: Wish) -> list[Promotion]:
-    stmt = select(Promotion).where(Promotion.status == PromotionStatus.active, Promotion.type == PromotionType.product)
+    stmt = select(Promotion).where(
+        Promotion.status == PromotionStatus.active,
+        Promotion.type == PromotionType.product,
+    )
     promotions = db.execute(stmt).scalars().all()
     matches: list[Promotion] = []
     for promo in promotions:
@@ -88,12 +94,13 @@ def evaluate_wish(db: Session, wish_id: UUID) -> dict:
         record_notification(db, wish, "promotion", message)
         notification_service.create_notification(
             db,
-            {
-                "user_id": wish.user_id,
-                "title": "Promoción disponible",
-                "description": message,
-                "data": {"promotion_id": str(promo.id), "product_id": str(wish.product_id)},
-            },
+            NotificationCreate(
+                user_id=wish.user_id,
+                type=NotificationType.promotion.value,
+                title="Promoción disponible",
+                message=message,
+                payload={"promotion_id": str(promo.id), "product_id": str(wish.product_id)},
+            ),
             send_email=True,
         )
         notified = True
@@ -107,12 +114,13 @@ def evaluate_wish(db: Session, wish_id: UUID) -> dict:
             record_notification(db, wish, "price_drop", message)
             notification_service.create_notification(
                 db,
-                {
-                    "user_id": wish.user_id,
-                    "title": "Precio objetivo alcanzado",
-                    "description": message,
-                    "data": {"product_id": str(wish.product_id)},
-                },
+                NotificationCreate(
+                    user_id=wish.user_id,
+                    type=NotificationType.promotion.value,
+                    title="Precio objetivo alcanzado",
+                    message=message,
+                    payload={"product_id": str(wish.product_id)},
+                ),
                 send_email=True,
             )
             notified = True
@@ -121,14 +129,7 @@ def evaluate_wish(db: Session, wish_id: UUID) -> dict:
 
 
 def _get_product_price(db: Session, product_id: UUID) -> Decimal | None:
-    from app.models.product import Product  # local import to avoid cycle
+    from app.models.product import Product
 
     product = db.get(Product, product_id)
     return Decimal(product.price) if product and product.price is not None else None
-
-
-def _enqueue_evaluation(wish_id: str) -> None:
-    task = celery_app.tasks.get("wish.evaluate")
-    if task is None:
-        return
-    task.apply_async(args=[wish_id], queue=settings.WISH_QUEUE, ignore_result=True)

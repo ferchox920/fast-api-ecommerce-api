@@ -3,6 +3,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.openapi.utils import get_openapi
 
+from app.api.error_handlers import register_exception_handlers
 from app.core.config import settings
 from app.api.routers import (
     admin,
@@ -90,6 +91,7 @@ app = FastAPI(
         "tryItOutEnabled": True,
     },
 )
+register_exception_handlers(app)
 
 # --- Middlewares ---
 app.add_middleware(

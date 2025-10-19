@@ -1,8 +1,9 @@
 from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException, status, Path
-from sqlalchemy.orm import Session
+from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.db.session import get_db
+from app.db.operations import commit_async
+from app.db.session_async import get_async_db
 from app.api.deps import get_current_admin
 from app.models.product import Product, ProductVariant
 from app.schemas.variant import VariantRead, VariantCreate, VariantUpdate
@@ -13,14 +14,14 @@ router = APIRouter(prefix="/products", tags=["variants"])
 
 # --------- Público (listar variantes de un producto) ---------
 @router.get("/{product_id}/variants", response_model=list[VariantRead])
-def list_for_product(
+async def list_for_product(
     product_id: UUID = Path(..., description="UUID del producto"),
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_async_db),
 ):
-    product = db.get(Product, product_id)
+    product = await db.get(Product, product_id)
     if not product or not product.active:
         raise HTTPException(status_code=404, detail="Product not found")
-    return variant_service.list_variants_for_product(db, product)
+    return await variant_service.list_variants_for_product(db, product)
 
 
 # --------- Admin: crear variante para un producto ---------
@@ -30,15 +31,17 @@ def list_for_product(
     status_code=status.HTTP_201_CREATED,
     dependencies=[Depends(get_current_admin)],
 )
-def create(
+async def create(
     product_id: UUID = Path(..., description="UUID del producto"),
     payload: VariantCreate = ...,
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_async_db),
 ):
-    product = db.get(Product, product_id)
+    product = await db.get(Product, product_id)
     if not product:
         raise HTTPException(status_code=404, detail="Product not found")
-    return variant_service.create_variant(db, product, payload)
+    variant = await variant_service.create_variant(db, product, payload)
+    await commit_async(db)
+    return variant
 
 
 # --------- Admin: actualizar variante ---------
@@ -47,15 +50,17 @@ def create(
     response_model=VariantRead,
     dependencies=[Depends(get_current_admin)],
 )
-def update(
+async def update(
     variant_id: UUID = Path(..., description="UUID de la variante"),
     payload: VariantUpdate = ...,
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_async_db),
 ):
-    variant = db.get(ProductVariant, variant_id)
+    variant = await db.get(ProductVariant, variant_id)
     if not variant:
         raise HTTPException(status_code=404, detail="Variant not found")
-    return variant_service.update_variant(db, variant, payload)
+    updated = await variant_service.update_variant(db, variant, payload)
+    await commit_async(db)
+    return updated
 
 
 # --------- Admin: eliminar variante ---------
@@ -64,12 +69,13 @@ def update(
     status_code=status.HTTP_204_NO_CONTENT,
     dependencies=[Depends(get_current_admin)],
 )
-def delete(
+async def delete(
     variant_id: UUID = Path(..., description="UUID de la variante"),
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_async_db),
 ):
-    variant = db.get(ProductVariant, variant_id)
+    variant = await db.get(ProductVariant, variant_id)
     if not variant:
         raise HTTPException(status_code=404, detail="Variant not found")
-    variant_service.delete_variant(db, variant)
+    await variant_service.delete_variant(db, variant)
+    await commit_async(db)
     return

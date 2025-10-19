@@ -1,24 +1,28 @@
-# app/services/brand_service.py
-from sqlalchemy.orm import Session
-from sqlalchemy import or_
-from sqlalchemy.exc import IntegrityError
-from fastapi import HTTPException, status
+from __future__ import annotations
 
-from app.models.product import Brand
-from app.schemas.brand import BrandCreate, BrandUpdate
+import re
 import uuid
 
+from fastapi import HTTPException, status
+from sqlalchemy import or_, select
+from sqlalchemy.exc import IntegrityError
+from sqlalchemy.ext.asyncio import AsyncSession
 
-def create_brand(db: Session, payload: BrandCreate) -> Brand:
+from app.db.operations import flush_async, refresh_async, rollback_async
+from app.models.product import Brand
+from app.schemas.brand import BrandCreate, BrandUpdate
+
+
+async def create_brand(db: AsyncSession, payload: BrandCreate) -> Brand:
     slug = payload.slug or slugify(payload.name)
 
-    # pre-chequeo para evitar IntegrityError y responder 400 claro
-    exists = (
-        db.query(Brand)
-        .filter(or_(Brand.name == payload.name, Brand.slug == slug))
-        .first()
+    exists_stmt = (
+        select(Brand.id)
+        .where(or_(Brand.name == payload.name, Brand.slug == slug))
+        .limit(1)
     )
-    if exists:
+    exists_result = await db.execute(exists_stmt)
+    if exists_result.scalar_one_or_none():
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Brand with the same name or slug already exists",
@@ -33,67 +37,75 @@ def create_brand(db: Session, payload: BrandCreate) -> Brand:
     )
     db.add(brand)
     try:
-        db.commit()
-    except IntegrityError:
-        db.rollback()
+        await flush_async(db, brand)
+    except IntegrityError as exc:
+        await rollback_async(db)
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Brand with the same name or slug already exists",
-        )
-    db.refresh(brand)
+        ) from exc
+    await refresh_async(db, brand)
     return brand
 
 
-def list_brands(db: Session) -> list[Brand]:
-    """Lista TODAS las brands (activas e inactivas), útil para admin."""
-    return db.query(Brand).order_by(Brand.created_at.desc()).all()
+async def list_all_brands(db: AsyncSession) -> list[Brand]:
+    stmt = select(Brand).order_by(Brand.created_at.desc())
+    result = await db.execute(stmt)
+    return result.scalars().all()
 
 
-def list_active_brands(db: Session) -> list[Brand]:
-    """Lista solo brands activas (para endpoints públicos)."""
-    return (
-        db.query(Brand)
-        .filter(Brand.active.is_(True))
+async def list_active_brands(db: AsyncSession) -> list[Brand]:
+    stmt = (
+        select(Brand)
+        .where(Brand.active.is_(True))
         .order_by(Brand.name.asc())
-        .all()
     )
+    result = await db.execute(stmt)
+    return result.scalars().all()
 
 
-def get_brand(db: Session, brand_id: uuid.UUID) -> Brand | None:
-    return db.query(Brand).filter(Brand.id == brand_id).first()
+async def get_brand(db: AsyncSession, brand_id: uuid.UUID) -> Brand | None:
+    return await db.get(Brand, brand_id)
 
 
-def update_brand(db: Session, brand: Brand, changes: BrandUpdate) -> Brand:
+async def update_brand(db: AsyncSession, brand: Brand, changes: BrandUpdate) -> Brand:
     data = changes.model_dump(exclude_unset=True)
 
     if "name" in data and data["name"]:
-        # si cambia el name y no se envía slug, recalculamos
-        if "slug" not in data or not data["slug"]:
-            data["slug"] = slugify(data["name"])
+        data.setdefault("slug", slugify(data["name"]))
+    if "slug" in data and data["slug"]:
+        candidate_slug = slugify(data["slug"])
+        if candidate_slug != brand.slug:
+            exists_stmt = select(Brand.id).where(Brand.slug == candidate_slug).limit(1)
+            exists = await db.execute(exists_stmt)
+            if exists.scalar_one_or_none():
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Brand with the same name or slug already exists",
+                )
+        data["slug"] = candidate_slug
 
-    for k, v in data.items():
-        setattr(brand, k, v)
+    for key, value in data.items():
+        setattr(brand, key, value)
 
     try:
-        db.commit()
-    except IntegrityError:
-        db.rollback()
+        await flush_async(db, brand)
+    except IntegrityError as exc:
+        await rollback_async(db)
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Brand with the same name or slug already exists",
-        )
-    db.refresh(brand)
+        ) from exc
+    await refresh_async(db, brand)
     return brand
 
 
-def delete_brand(db: Session, brand: Brand) -> None:
-    db.delete(brand)
-    db.commit()
+async def delete_brand(db: AsyncSession, brand: Brand) -> None:
+    await db.delete(brand)
 
 
 # Helper local por si no tenés utilidades aún
 def slugify(text: str) -> str:
-    import re
     s = text.strip().lower()
     s = re.sub(r"[^a-z0-9\s-]", "", s)
     s = re.sub(r"\s+", "-", s)

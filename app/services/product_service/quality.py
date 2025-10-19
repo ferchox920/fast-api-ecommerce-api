@@ -1,30 +1,40 @@
-from sqlalchemy.orm import Session
-from app.models.product import Product, ProductVariant, ProductImage
+# app/services/product_service/quality.py
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 
-def compute_product_quality(db: Session, product: Product) -> dict:
+from app.models.product import Product, ProductImage, ProductVariant
+
+
+async def compute_product_quality(db: AsyncSession, product: Product) -> dict:
     points = 0
     issues: list[str] = []
 
-    imgs = db.query(ProductImage).filter(ProductImage.product_id == product.id).all()
-    if imgs:
+    images_result = await db.execute(
+        select(ProductImage).where(ProductImage.product_id == product.id)
+    )
+    images = images_result.scalars().all()
+    if images:
         points += 20
-        if any(i.is_primary for i in imgs):
+        if any(image.is_primary for image in images):
             points += 10
         else:
             issues.append("Falta imagen principal")
     else:
-        issues.append("Sin imágenes")
+        issues.append("Sin imagenes")
 
     if (product.description or "") and len(product.description.strip()) >= 50:
         points += 25
     else:
-        issues.append("Descripción corta o ausente (>=50)")
+        issues.append("Descripcion corta o ausente (>=50)")
 
-    vars = db.query(ProductVariant).filter(
-        ProductVariant.product_id == product.id,
-        ProductVariant.active == True  # noqa: E712
-    ).all()
-    if vars:
+    variants_result = await db.execute(
+        select(ProductVariant).where(
+            ProductVariant.product_id == product.id,
+            ProductVariant.active == True,  # noqa: E712
+        )
+    )
+    variants = variants_result.scalars().all()
+    if variants:
         points += 20
     else:
         issues.append("No hay variantes activas")
@@ -37,7 +47,7 @@ def compute_product_quality(db: Session, product: Product) -> dict:
     if product.title and len(product.title.strip()) >= 8:
         points += 5
     else:
-        issues.append("Título muy corto")
+        issues.append("Titulo muy corto")
 
     score = min(points, 100)
     return {"score": score, "issues": issues}

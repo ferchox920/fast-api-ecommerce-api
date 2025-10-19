@@ -1,61 +1,50 @@
-from fastapi import HTTPException, status
-from sqlalchemy.orm import Session
+# app/services/product_service/inventory.py
+from collections.abc import Callable
 
+from fastapi import HTTPException, status
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.db.operations import flush_async, refresh_async, run_sync
 from app.models.product import ProductVariant
 from app.services import inventory_service
 from app.services.exceptions import ServiceError
 
 
-def _commit_and_refresh(db: Session, variant: ProductVariant) -> ProductVariant:
-    db.commit()
-    db.refresh(variant)
+async def _run_inventory_action(
+    db: AsyncSession,
+    variant: ProductVariant,
+    action: Callable[..., ProductVariant],
+    *args,
+) -> ProductVariant:
+    try:
+        await run_sync(db, action, variant, *args)
+    except ServiceError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=exc.detail) from exc
+
+    await flush_async(db, variant)
+    await refresh_async(db, variant)
     return variant
 
 
-def receive_stock(db: Session, variant: ProductVariant, quantity: int, reason: str | None = None) -> ProductVariant:
-    try:
-        inventory_service.receive_stock(db, variant, quantity, reason)
-        return _commit_and_refresh(db, variant)
-    except ServiceError as exc:
-        db.rollback()
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=exc.detail)
+async def receive_stock(db: AsyncSession, variant: ProductVariant, quantity: int, reason: str | None = None) -> ProductVariant:
+    return await _run_inventory_action(db, variant, inventory_service.receive_stock, quantity, reason)
 
 
-def adjust_stock(db: Session, variant: ProductVariant, quantity: int, reason: str | None = None) -> ProductVariant:
-    try:
-        inventory_service.adjust_stock(db, variant, quantity, reason)
-        return _commit_and_refresh(db, variant)
-    except ServiceError as exc:
-        db.rollback()
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=exc.detail)
+async def adjust_stock(db: AsyncSession, variant: ProductVariant, quantity: int, reason: str | None = None) -> ProductVariant:
+    return await _run_inventory_action(db, variant, inventory_service.adjust_stock, quantity, reason)
 
 
-def reserve_stock(db: Session, variant: ProductVariant, quantity: int, reason: str | None = None) -> ProductVariant:
-    try:
-        inventory_service.reserve_stock(db, variant, quantity, reason)
-        return _commit_and_refresh(db, variant)
-    except ServiceError as exc:
-        db.rollback()
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=exc.detail)
+async def reserve_stock(db: AsyncSession, variant: ProductVariant, quantity: int, reason: str | None = None) -> ProductVariant:
+    return await _run_inventory_action(db, variant, inventory_service.reserve_stock, quantity, reason)
 
 
-def release_stock(db: Session, variant: ProductVariant, quantity: int, reason: str | None = None) -> ProductVariant:
-    try:
-        inventory_service.release_stock(db, variant, quantity, reason)
-        return _commit_and_refresh(db, variant)
-    except ServiceError as exc:
-        db.rollback()
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=exc.detail)
+async def release_stock(db: AsyncSession, variant: ProductVariant, quantity: int, reason: str | None = None) -> ProductVariant:
+    return await _run_inventory_action(db, variant, inventory_service.release_stock, quantity, reason)
 
 
-def commit_sale(db: Session, variant: ProductVariant, quantity: int, reason: str | None = None) -> ProductVariant:
-    try:
-        inventory_service.commit_sale(db, variant, quantity, reason)
-        return _commit_and_refresh(db, variant)
-    except ServiceError as exc:
-        db.rollback()
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=exc.detail)
+async def commit_sale(db: AsyncSession, variant: ProductVariant, quantity: int, reason: str | None = None) -> ProductVariant:
+    return await _run_inventory_action(db, variant, inventory_service.commit_sale, quantity, reason)
 
 
-def list_movements(db: Session, variant: ProductVariant, limit: int = 50, offset: int = 0):
-    return inventory_service.list_movements(db, variant, limit, offset)
+async def list_movements(db: AsyncSession, variant: ProductVariant, limit: int = 50, offset: int = 0):
+    return await run_sync(db, inventory_service.list_movements, variant, limit, offset)

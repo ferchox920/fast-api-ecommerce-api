@@ -1,13 +1,21 @@
-# app/services/user_service.py
-from sqlalchemy.orm import Session
+from __future__ import annotations
+
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
+
 from app.core.security import get_password_hash, verify_password
+from app.db.operations import flush_async, refresh_async
 from app.models.user import User
 from app.schemas.user import UserCreate, UserCreateOAuth, UserUpdate
 
-def get_by_email(db: Session, email: str) -> User | None:
-    return db.query(User).filter(User.email == email).first()
 
-def create_user(db: Session, data: UserCreate) -> User:
+async def get_by_email(db: AsyncSession, email: str) -> User | None:
+    stmt = select(User).where(User.email == email).limit(1)
+    result = await db.execute(stmt)
+    return result.scalars().first()
+
+
+async def create_user(db: AsyncSession, data: UserCreate) -> User:
     user = User(
         email=data.email,
         full_name=data.full_name,
@@ -21,28 +29,37 @@ def create_user(db: Session, data: UserCreate) -> User:
         phone=data.phone,
         birthdate=data.birthdate,
         avatar_url=str(data.avatar_url) if data.avatar_url else None,
-        email_verified=False,  # será True al confirmar email
+        email_verified=False,
     )
     db.add(user)
-    db.commit()
-    db.refresh(user)
+    await flush_async(db, user)
+    await refresh_async(db, user)
     return user
 
-def authenticate(db: Session, email: str, password: str) -> User | None:
-    user = get_by_email(db, email)
+
+async def authenticate(db: AsyncSession, email: str, password: str) -> User | None:
+    user = await get_by_email(db, email)
     if not user or not user.hashed_password:
         return None
     if not verify_password(password, user.hashed_password):
         return None
     return user
 
-def get_by_oauth(db: Session, provider: str, sub: str) -> User | None:
-    return db.query(User).filter(User.oauth_provider == provider, User.oauth_sub == sub).first()
 
-def upsert_oauth_user(db: Session, data: UserCreateOAuth) -> User:
-    user = get_by_oauth(db, data.oauth_provider, data.oauth_sub)
+async def get_by_oauth(db: AsyncSession, provider: str, sub: str) -> User | None:
+    stmt = (
+        select(User)
+        .where(User.oauth_provider == provider)
+        .where(User.oauth_sub == sub)
+        .limit(1)
+    )
+    result = await db.execute(stmt)
+    return result.scalars().first()
+
+
+async def upsert_oauth_user(db: AsyncSession, data: UserCreateOAuth) -> User:
+    user = await get_by_oauth(db, data.oauth_provider, data.oauth_sub)
     if user:
-        # update básico
         if data.full_name and user.full_name != data.full_name:
             user.full_name = data.full_name
         if data.oauth_picture:
@@ -50,8 +67,7 @@ def upsert_oauth_user(db: Session, data: UserCreateOAuth) -> User:
         if not user.email_verified and data.email_verified_from_provider:
             user.email_verified = True
     else:
-        # ¿Existe por email? Vincular
-        user = get_by_email(db, data.email)
+        user = await get_by_email(db, data.email)
         if user:
             user.oauth_provider = data.oauth_provider
             user.oauth_sub = data.oauth_sub
@@ -67,27 +83,28 @@ def upsert_oauth_user(db: Session, data: UserCreateOAuth) -> User:
                 oauth_sub=data.oauth_sub,
                 oauth_picture=str(data.oauth_picture) if data.oauth_picture else None,
                 email_verified=bool(data.email_verified_from_provider),
-                # sin password local
             )
             db.add(user)
-    db.commit()
-    db.refresh(user)
+    await flush_async(db, user)
+    await refresh_async(db, user)
     return user
 
-def mark_email_verified(db: Session, user: User) -> User:
+
+async def mark_email_verified(db: AsyncSession, user: User) -> User:
     user.email_verified = True
     db.add(user)
-    db.commit()
-    db.refresh(user)
+    await flush_async(db, user)
+    await refresh_async(db, user)
     return user
 
-def update_user(db: Session, user: User, changes: UserUpdate) -> User:
+
+async def update_user(db: AsyncSession, user: User, changes: UserUpdate) -> User:
     data = changes.model_dump(exclude_unset=True)
     if "avatar_url" in data and data["avatar_url"] is not None:
         data["avatar_url"] = str(data["avatar_url"])
     for field, value in data.items():
         setattr(user, field, value)
     db.add(user)
-    db.commit()
-    db.refresh(user)
+    await flush_async(db, user)
+    await refresh_async(db, user)
     return user

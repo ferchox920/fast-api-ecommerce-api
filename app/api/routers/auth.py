@@ -1,57 +1,60 @@
-# app/api/routers/auth.py
+from __future__ import annotations
+
+import uuid
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, Depends, HTTPException, status, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from fastapi.security import OAuth2PasswordRequestForm
 from jose import JWTError
-from sqlalchemy.orm import Session
+from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.db.session import get_db
-from app.models.user import User
-from app.services.user_service import (
-    authenticate,
-    upsert_oauth_user,
-    get_by_email,
-    mark_email_verified,
-)
+from app.core.config import settings
 from app.core.security import (
     create_access_token,
-    create_refresh_token,
-    decode_refresh_token,
     create_email_verification_token,
+    create_refresh_token,
     decode_email_verification_token,
+    decode_refresh_token,
 )
-from app.core.config import settings
+from app.db.operations import commit_async
+from app.db.session_async import get_async_db
+from app.models.user import User
+from app.schemas.auth import RefreshRequest, TokenPair, TokenRefresh, VerifyEmailRequest
 from app.schemas.user import UserRead
-from app.schemas.auth import TokenPair, RefreshRequest, TokenRefresh, VerifyEmailRequest
 from app.services.email_service import send_verification_email
+from app.services.user_service import (
+    authenticate,
+    get_by_email,
+    mark_email_verified,
+    upsert_oauth_user,
+)
 
 router = APIRouter(prefix="/auth", tags=["auth"])
+
 
 def _get_user_scopes(user: User) -> list[str]:
     """Centraliza la lógica de asignación de scopes según el rol del usuario."""
     user_scopes = ["users:me"]
     if user.is_superuser:
-        user_scopes.extend(["admin", "products:read", "products:write", "purchases:read", "purchases:write"])
+        user_scopes.extend(
+            ["admin", "products:read", "products:write", "purchases:read", "purchases:write"]
+        )
     else:
-        # Asignamos scopes de solo lectura a usuarios no-admin.
         user_scopes.extend(["products:read", "purchases:read"])
     return user_scopes
 
 
 @router.post("/login", response_model=TokenPair)
-def login(
+async def login(
     form_data: OAuth2PasswordRequestForm = Depends(),
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_async_db),
 ):
-    user = authenticate(db, form_data.username, form_data.password)
+    user = await authenticate(db, form_data.username, form_data.password)
     if not user:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Incorrect email or password",
         )
-    
-    # ... (código de verificación de email sin cambios)
 
     user_scopes = _get_user_scopes(user)
     access = create_access_token(subject=user.id, extra={"scopes": user_scopes})
@@ -59,7 +62,7 @@ def login(
 
     user.last_login_at = datetime.now(timezone.utc)
     db.add(user)
-    db.commit()
+    await commit_async(db)
 
     return {
         "access_token": access,
@@ -68,20 +71,20 @@ def login(
         "expires_in": settings.ACCESS_TOKEN_EXPIRE_MINUTES * 60,
         "user": UserRead.model_validate(user),
     }
-    
+
+
 @router.post("/refresh", response_model=TokenRefresh)
-def refresh_token(payload: RefreshRequest):
+async def refresh_token(payload: RefreshRequest):
     try:
         data = decode_refresh_token(payload.refresh_token)
-        user_id = data["sub"]  # UUID str
+        user_id = data["sub"]
         token_scopes = data.get("scopes", []) or []
-    except (JWTError, KeyError):
+    except (JWTError, KeyError) as exc:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid refresh token",
-        )
+        ) from exc
 
-    # Preservar scopes del refresh al emitir el nuevo access
     new_access = create_access_token(subject=user_id, extra={"scopes": token_scopes})
     return {
         "access_token": new_access,
@@ -89,58 +92,52 @@ def refresh_token(payload: RefreshRequest):
         "expires_in": settings.ACCESS_TOKEN_EXPIRE_MINUTES * 60,
     }
 
-# --- Email verification (pedir link) ---
+
 @router.post("/verify/request", status_code=204)
-def request_email_verification(
+async def request_email_verification(
     payload: VerifyEmailRequest,
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_async_db),
 ):
-    user = get_by_email(db, payload.email)
+    user = await get_by_email(db, payload.email)
     if not user:
-        # No revelamos si existe o no el email
         return
     token = create_email_verification_token(user.id)
     verify_url = f"{settings.API_BASE_URL}{settings.API_V1_STR}/auth/verify/confirm?token={token}"
     send_verification_email(user.email, verify_url)
-    return
 
-# --- Email verification (confirmar) ---
+
 @router.get("/verify/confirm")
-def confirm_email(token: str = Query(...), db: Session = Depends(get_db)):
+async def confirm_email(token: str = Query(...), db: AsyncSession = Depends(get_async_db)):
     try:
-        user_id = decode_email_verification_token(token)  # UUID str
-    except JWTError:
-        raise HTTPException(status_code=400, detail="Invalid or expired token")
+        user_id = decode_email_verification_token(token)
+    except JWTError as exc:
+        raise HTTPException(status_code=400, detail="Invalid or expired token") from exc
 
-    user = db.query(User).filter(User.id == user_id).first()
+    try:
+        user_uuid = uuid.UUID(str(user_id))
+    except ValueError as exc:  # pragma: no cover - token ya validado en decode
+        raise HTTPException(status_code=400, detail="Invalid token payload") from exc
+
+    user = await db.get(User, user_uuid)
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
     if user.email_verified:
         return {"message": "Email already verified"}
 
-    mark_email_verified(db, user)
+    await mark_email_verified(db, user)
+    await commit_async(db)
     return {"message": "Email verified successfully"}
 
-# --- OAuth upsert (intercambio simplificado) ---
+
 @router.post("/oauth/upsert", response_model=TokenPair)
-def oauth_upsert(data: dict, db: Session = Depends(get_db)):
-    """
-    Espera un payload del frontend que ya validó el ID Token con el proveedor (PoC):
-    {
-      "provider": "google",
-      "sub": "provider_subject",
-      "email": "user@example.com",
-      "full_name": "Name",
-      "picture": "https://...",
-      "email_verified": true
-    }
-    """
+async def oauth_upsert(data: dict, db: AsyncSession = Depends(get_async_db)):
     required = {"provider", "sub", "email"}
     if not required.issubset(data):
         raise HTTPException(status_code=400, detail="Missing provider/sub/email")
 
-    from app.schemas.user import UserCreateOAuth
-    u = UserCreateOAuth(
+    from app.schemas.user import UserCreateOAuth  # import local para evitar ciclos
+
+    user_payload = UserCreateOAuth(
         email=data["email"],
         full_name=data.get("full_name"),
         oauth_provider=data["provider"],
@@ -148,9 +145,8 @@ def oauth_upsert(data: dict, db: Session = Depends(get_db)):
         oauth_picture=data.get("picture"),
         email_verified_from_provider=bool(data.get("email_verified")),
     )
-    user = upsert_oauth_user(db, u)
+    user = await upsert_oauth_user(db, user_payload)
 
-    # Si pedimos verificación local y el IdP no verificó
     if settings.ENFORCE_EMAIL_VERIFICATION and not user.email_verified:
         token = create_email_verification_token(user.id)
         verify_url = f"{settings.API_BASE_URL}{settings.API_V1_STR}/auth/verify/confirm?token={token}"
@@ -160,8 +156,9 @@ def oauth_upsert(data: dict, db: Session = Depends(get_db)):
             detail="Email not verified. Verification sent.",
         )
 
-    user_scopes = _get_user_scopes(user)
+    await commit_async(db)
 
+    user_scopes = _get_user_scopes(user)
     access = create_access_token(subject=user.id, extra={"scopes": user_scopes})
     refresh = create_refresh_token(subject=user.id, extra={"scopes": user_scopes})
     return {

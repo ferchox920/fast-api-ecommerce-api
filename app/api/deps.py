@@ -2,11 +2,12 @@
 from fastapi import Depends, HTTPException, Security, status
 from fastapi.security import OAuth2PasswordBearer, SecurityScopes
 from jose import JWTError, jwt
-from sqlalchemy.orm import Session
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
 from app.core.security import ALGORITHM
-from app.db.session import get_db
+from app.db.operations import run_sync
+from app.db.session_async import get_async_db
 from app.models.user import User
 from app.schemas.user import TokenPayload
 
@@ -53,9 +54,9 @@ def decode_token_no_db(token: str) -> TokenPayload:
     return token_data
 
 
-def get_current_user(
+async def get_current_user(
     security_scopes: SecurityScopes,
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_async_db),
     token: str = Depends(oauth2_scheme),
 ) -> User:
     cred_exc = HTTPException(
@@ -72,7 +73,7 @@ def get_current_user(
     if token_data.sub is None:
         raise cred_exc
 
-    user = db.query(User).filter(User.id == token_data.sub).first()
+    user = await run_sync(db, lambda sync_db: sync_db.query(User).filter(User.id == token_data.sub).first())
     if user is None:
         raise cred_exc
 
@@ -88,8 +89,8 @@ def get_current_user(
     return user
 
 
-def get_optional_user(
-    db: Session = Depends(get_db),
+async def get_optional_user(
+    db: AsyncSession = Depends(get_async_db),
     token: str | None = Depends(oauth2_scheme_optional),
 ) -> User | None:
     if not token:
@@ -103,7 +104,7 @@ def get_optional_user(
     if token_data.sub is None:
         return None
 
-    return db.query(User).filter(User.id == token_data.sub).first()
+    return await run_sync(db, lambda sync_db: sync_db.query(User).filter(User.id == token_data.sub).first())
 
 
 def get_current_active_user(

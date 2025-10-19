@@ -1,7 +1,10 @@
 from __future__ import annotations
+
 import uuid
-from sqlalchemy.orm import Session
 from fastapi import HTTPException
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 
 from app.models.cart import Cart, CartItem, CartStatus
 from app.models.product import ProductVariant
@@ -12,8 +15,8 @@ from app.services.pricing import get_variant_effective_price
 def _as_uuid(value: str, field: str) -> uuid.UUID:
     try:
         return uuid.UUID(str(value))
-    except Exception:
-        raise HTTPException(422, f"Invalid UUID for {field}")
+    except Exception as exc:
+        raise HTTPException(422, f"Invalid UUID for {field}") from exc
 
 
 def _recompute_totals(cart: Cart) -> None:
@@ -22,24 +25,35 @@ def _recompute_totals(cart: Cart) -> None:
     cart.total_amount = subtotal - float(cart.discount_amount or 0)
 
 
-def get_active_cart(
-    db: Session,
+async def _refresh_cart(db: AsyncSession, cart: Cart) -> None:
+    await db.refresh(cart)
+    await db.refresh(cart, attribute_names=["items"])
+
+
+async def get_active_cart(
+    db: AsyncSession,
     *,
     user_id: str | None = None,
     guest_token: str | None = None,
 ) -> Cart | None:
-    query = db.query(Cart).filter(Cart.status == CartStatus.active)
+    stmt = select(Cart).options(selectinload(Cart.items)).where(Cart.status == CartStatus.active)
     if user_id:
-        query = query.filter(Cart.user_id == user_id)
+        stmt = stmt.where(Cart.user_id == user_id)
     elif guest_token:
-        query = query.filter(Cart.guest_token == guest_token)
+        stmt = stmt.where(Cart.guest_token == guest_token)
     else:
         return None
-    return query.order_by(Cart.created_at.desc()).first()
+
+    stmt = stmt.order_by(Cart.created_at.desc()).limit(1)
+    result = await db.execute(stmt)
+    cart = result.scalars().first()
+    if cart:
+        await _refresh_cart(db, cart)
+    return cart
 
 
-def create_cart(
-    db: Session,
+async def create_cart(
+    db: AsyncSession,
     *,
     payload: CartCreate,
     user_id: str | None = None,
@@ -59,7 +73,8 @@ def create_cart(
         total_amount=0,
     )
     db.add(cart)
-    db.commit(); db.refresh(cart)
+    await db.flush()
+    await _refresh_cart(db, cart)
     return cart
 
 
@@ -70,17 +85,23 @@ def _get_item(cart: Cart, item_id: uuid.UUID) -> CartItem | None:
     return None
 
 
-def add_item(
-    db: Session,
+async def _ensure_cart_loaded(db: AsyncSession, cart: Cart) -> None:
+    await _refresh_cart(db, cart)
+
+
+async def add_item(
+    db: AsyncSession,
     *,
     cart: Cart,
     item_payload: CartItemCreate,
 ) -> Cart:
-    variant = db.get(ProductVariant, _as_uuid(item_payload.variant_id, "variant_id"))
+    await _ensure_cart_loaded(db, cart)
+
+    variant = await db.get(ProductVariant, _as_uuid(item_payload.variant_id, "variant_id"))
     if not variant:
         raise HTTPException(404, "Variant not found")
 
-    unit_price = get_variant_effective_price(db, variant)
+    unit_price = await get_variant_effective_price(db, variant)
 
     existing = next((i for i in cart.items if i.variant_id == variant.id), None)
     if existing:
@@ -98,17 +119,20 @@ def add_item(
 
     _recompute_totals(cart)
     db.add(cart)
-    db.commit(); db.refresh(cart)
+    await db.flush()
+    await _refresh_cart(db, cart)
     return cart
 
 
-def update_item(
-    db: Session,
+async def update_item(
+    db: AsyncSession,
     *,
     cart: Cart,
     item_id: str,
     payload: CartItemUpdate,
 ) -> Cart:
+    await _ensure_cart_loaded(db, cart)
+
     item_uuid = _as_uuid(item_id, "item_id")
     item = _get_item(cart, item_uuid)
     if not item:
@@ -119,25 +143,29 @@ def update_item(
 
     _recompute_totals(cart)
     db.add(cart)
-    db.commit(); db.refresh(cart)
+    await db.flush()
+    await _refresh_cart(db, cart)
     return cart
 
 
-def remove_item(
-    db: Session,
+async def remove_item(
+    db: AsyncSession,
     *,
     cart: Cart,
     item_id: str,
 ) -> Cart:
+    await _ensure_cart_loaded(db, cart)
+
     item_uuid = _as_uuid(item_id, "item_id")
     item = _get_item(cart, item_uuid)
     if not item:
         raise HTTPException(404, "Cart item not found")
 
     cart.items.remove(item)
-    db.flush()
+    await db.flush()
     _recompute_totals(cart)
 
     db.add(cart)
-    db.commit(); db.refresh(cart)
+    await db.flush()
+    await _refresh_cart(db, cart)
     return cart

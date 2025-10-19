@@ -1,10 +1,10 @@
 ﻿from __future__ import annotations
 
+import asyncio
+import uuid
 from datetime import datetime, timezone
 from typing import Iterable, Optional
-import uuid
 
-from fastapi import HTTPException, status
 from sqlalchemy.orm import Session
 
 from app.core.notification_manager import manager as ws_manager
@@ -14,6 +14,7 @@ from app.models.product_question import ProductQuestion, ProductAnswer
 from app.models.user import User
 from app.schemas.notification import NotificationCreate, NotificationUpdate
 from app.services import email_service
+from app.services.exceptions import DomainValidationError, ResourceNotFoundError
 
 
 def _utcnow() -> datetime:
@@ -44,7 +45,7 @@ def create_notification(db: Session, data: NotificationCreate, *, send_email: bo
         payload=data.payload,
     )
     db.add(notification)
-    db.commit()
+    db.flush()
     db.refresh(notification)
 
     payload = {
@@ -55,7 +56,6 @@ def create_notification(db: Session, data: NotificationCreate, *, send_email: bo
         "payload": notification.payload,
         "created_at": notification.created_at.isoformat(),
     }
-    import asyncio
 
     try:
         loop = asyncio.get_running_loop()
@@ -78,16 +78,17 @@ def create_notification(db: Session, data: NotificationCreate, *, send_email: bo
 def mark_read(db: Session, notification_id: str, user: User, payload: NotificationUpdate) -> Notification:
     try:
         notif_uuid = uuid.UUID(str(notification_id))
-    except Exception:
-        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "Invalid notification id")
+    except Exception as exc:
+        raise DomainValidationError("Invalid notification id") from exc
 
     notification = db.get(Notification, notif_uuid)
     if not notification or notification.user_id != user.id:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Notification not found")
+        raise ResourceNotFoundError("Notification not found")
+
     notification.is_read = payload.is_read
     notification.read_at = _utcnow() if payload.is_read else None
     db.add(notification)
-    db.commit()
+    db.flush()
     db.refresh(notification)
     return notification
 
@@ -171,7 +172,7 @@ def notify_new_promotion(db: Session, promotion) -> None:
         .filter(User.is_superuser == True)  # noqa: E712
         .all()
     )
-    title = "Promocion activada"
+    title = "Promoción activada"
     message = f"{promotion.name} activo hasta {promotion.end_at.date()}"
     for admin in admins:
         data = NotificationCreate(

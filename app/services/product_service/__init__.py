@@ -18,6 +18,7 @@ from .variants import (
     get_variant,
     delete_variant,
     set_stock,
+    create_variant,
 )
 
 from .images import (
@@ -44,7 +45,7 @@ __all__ = [
     # crud
     "create_product", "update_product",
     # variants
-    "list_variants_for_product", "add_variant", "update_variant", "get_variant", "delete_variant", "set_stock",
+    "list_variants_for_product", "add_variant", "update_variant", "get_variant", "delete_variant", "set_stock", "create_variant",
     # images
     "add_image", "set_primary_image",
     # inventory

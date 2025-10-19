@@ -1,7 +1,8 @@
 from __future__ import annotations
 from typing import Optional
-from sqlalchemy.orm import Session
 from fastapi import HTTPException
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 import unicodedata
 import uuid
 import re
@@ -15,8 +16,9 @@ def slugify(text: str) -> str:
     text = re.sub(r"\s+", "-", text.strip())
     return text.lower()
 
-def slug_exists(db: Session, slug: str) -> bool:
-    return db.query(Product).filter(Product.slug == slug).first() is not None
+async def slug_exists(db: AsyncSession, slug: str) -> bool:
+    result = await db.execute(select(Product.id).where(Product.slug == slug))
+    return result.scalar_one_or_none() is not None
 
 def as_uuid(value: str | uuid.UUID | None, field: str) -> Optional[uuid.UUID]:
     if value is None:

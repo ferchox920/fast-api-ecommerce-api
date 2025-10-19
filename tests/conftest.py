@@ -7,6 +7,9 @@ ROOT_DIR = Path(__file__).resolve().parents[1]
 if str(ROOT_DIR) not in sys.path:
     sys.path.insert(0, str(ROOT_DIR))
 
+import os
+import uuid
+
 import pytest
 import pytest_asyncio
 import httpx
@@ -14,8 +17,11 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker, Session
 from typing import Generator
 
+os.environ.setdefault("DATABASE_URL", "sqlite:///./test.db")
+os.environ.setdefault("ASYNC_DATABASE_URL", "sqlite+aiosqlite:///./test.db")
+
 from app.main import app
-from app.db.session import Base, get_db
+from app.db.session import Base
 from app.core.security import get_password_hash
 from app.models.user import User
 
@@ -41,31 +47,26 @@ def setup_database():
     yield
     Base.metadata.drop_all(bind=sync_engine)
 
+@pytest.fixture(autouse=True)
+def clean_tables():
+    yield
+    with sync_engine.begin() as connection:
+        for table in reversed(Base.metadata.sorted_tables):
+            connection.execute(table.delete())
+
 @pytest.fixture(scope="function")
 def db_session() -> Generator[Session, any, None]:
-    """
-    Provee una sesión de DB aislada por test, envuelta en una transacción
-    que se revierte al final del test.
-    """
-    connection = sync_engine.connect()
-    transaction = connection.begin()
-    session = TestingSessionLocal(bind=connection)
-
+    """Provee una sesión corta para pruebas unitarias."""
+    session = TestingSessionLocal()
     try:
         yield session
     finally:
+        session.rollback()
         session.close()
-        if transaction.is_active:
-            transaction.rollback()
-        connection.close()
 
 @pytest_asyncio.fixture(scope="function")
-async def client(db_session: Session):
-    """Provee un AsyncClient con la sesión transaccional inyectada."""
-    def override_get_db():
-        yield db_session
-
-    app.dependency_overrides[get_db] = override_get_db
+async def client():
+    """Provee un AsyncClient enlazado a la app sin overrides adicionales."""
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as ac:
         yield ac
     app.dependency_overrides.clear()
@@ -77,7 +78,7 @@ async def client(db_session: Session):
 def admin_user(db_session: Session) -> User:
     """Crea un usuario admin DENTRO de la transacción del test."""
     admin = User(
-        email="admin@example.com",
+        email=f"admin-{uuid.uuid4()}@example.com",
         full_name="Test Admin",
         hashed_password=get_password_hash("Admin1234"),
         is_superuser=True,
@@ -93,7 +94,7 @@ def admin_user(db_session: Session) -> User:
 def manager_user(db_session: Session) -> User:
     """Crea un usuario 'manager' DENTRO de la transacción del test."""
     manager = User(
-        email="manager@example.com",
+        email=f"manager-{uuid.uuid4()}@example.com",
         full_name="Test Manager",
         hashed_password=get_password_hash("Manager1234"),
         is_superuser=False,
@@ -110,7 +111,7 @@ def manager_user(db_session: Session) -> User:
 def normal_user(db_session: Session) -> User:
     """Crea un usuario normal DENTRO de la transacción del test."""
     user = User(
-        email="user@example.com",
+        email=f"user-{uuid.uuid4()}@example.com",
         full_name="Test User",
         hashed_password=get_password_hash("User1234"),
         is_superuser=False,

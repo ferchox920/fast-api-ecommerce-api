@@ -1,8 +1,8 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, Security, status
+from fastapi import APIRouter, Depends, Security, status, Response
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_current_user
@@ -10,6 +10,7 @@ from app.db.session import get_db
 from app.models.user import User
 from app.schemas.wish import WishCreate, WishRead, WishWithNotifications
 from app.services import wish_service
+from app.services.exceptions import ServiceError
 
 router = APIRouter(prefix="/wishes", tags=["wishes"])
 
@@ -29,14 +30,35 @@ def create_wish(
     db: Session = Depends(get_db),
     current_user: User = Security(get_current_user, scopes=["users:write"]),
 ) -> WishRead:
-    wish = wish_service.create_wish(db, current_user.id, payload)
+    try:
+        wish = wish_service.create_wish(db, current_user.id, payload)
+        db.commit()
+    except ServiceError:
+        db.rollback()
+        raise
+    except Exception:
+        db.rollback()
+        raise
+    db.refresh(wish)
     return WishRead.model_validate(wish, from_attributes=True)
 
 
-@router.delete("/{wish_id}", status_code=status.HTTP_204_NO_CONTENT)
+@router.delete(
+    "/{wish_id}",
+    status_code=status.HTTP_200_OK,
+)
 def delete_wish(
     wish_id: UUID,
     db: Session = Depends(get_db),
     current_user: User = Security(get_current_user, scopes=["users:write"]),
 ) -> None:
-    wish_service.delete_wish(db, wish_id, current_user.id)
+    try:
+        wish_service.delete_wish(db, wish_id, current_user.id)
+        db.commit()
+    except ServiceError:
+        db.rollback()
+        raise
+    except Exception:
+        db.rollback()
+        raise
+    return {"detail": "Wish deleted"}

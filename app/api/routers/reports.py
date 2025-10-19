@@ -1,16 +1,18 @@
-# app/api/routers/reports.py
-from fastapi import APIRouter, Depends, Security, Query
-from sqlalchemy.orm import Session
+from __future__ import annotations
+
+from fastapi import APIRouter, Depends, Query, Security
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_current_user
 from app.core.config import settings
-from app.db.session import get_db
+from app.db.operations import run_sync
+from app.db.session_async import get_async_db
 from app.models.user import User
 from app.schemas.report import (
-    SalesReport,
-    InventoryValueReport,
     CostAnalysisReport,
     InventoryRotationReport,
+    InventoryValueReport,
+    SalesReport,
 )
 from app.services import report_service
 from app.tasks import reports as report_tasks
@@ -24,13 +26,13 @@ def _execute_task(async_result, schema_cls):
 
 
 @router.get("/sales", response_model=SalesReport)
-def get_sales(
+async def get_sales(
     days: int = Query(30, ge=1, le=365, description="Periodo del reporte en dias"),
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_async_db),
     current_user: User = Security(get_current_user, scopes=["admin", "purchases:read"]),
 ):
     if settings.CELERY_TASK_ALWAYS_EAGER:
-        return report_service.get_sales_report(db, days=days)
+        return await run_sync(db, report_service.get_sales_report, days)
     async_result = report_tasks.generate_sales_report.delay(days=days)
     return _execute_task(async_result, SalesReport)
 
@@ -40,12 +42,12 @@ def get_sales(
     response_model=InventoryValueReport,
     summary="Reporte de Valor de Inventario",
 )
-def get_inventory_value(
-    db: Session = Depends(get_db),
+async def get_inventory_value(
+    db: AsyncSession = Depends(get_async_db),
     current_user: User = Security(get_current_user, scopes=["admin", "purchases:read"]),
 ):
     if settings.CELERY_TASK_ALWAYS_EAGER:
-        return report_service.get_inventory_value_report(db)
+        return await run_sync(db, report_service.get_inventory_value_report)
     async_result = report_tasks.generate_inventory_value_report.delay()
     return _execute_task(async_result, InventoryValueReport)
 
@@ -55,13 +57,13 @@ def get_inventory_value(
     response_model=CostAnalysisReport,
     summary="Analisis de Costos de Compra",
 )
-def get_cost_analysis(
+async def get_cost_analysis(
     days: int = Query(30, ge=1, le=365, description="Periodo del reporte en dias"),
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_async_db),
     current_user: User = Security(get_current_user, scopes=["admin", "purchases:read"]),
 ):
     if settings.CELERY_TASK_ALWAYS_EAGER:
-        return report_service.get_cost_analysis_report(db, days=days)
+        return await run_sync(db, report_service.get_cost_analysis_report, days)
     async_result = report_tasks.generate_cost_analysis_report.delay(days=days)
     return _execute_task(async_result, CostAnalysisReport)
 
@@ -71,12 +73,12 @@ def get_cost_analysis(
     response_model=InventoryRotationReport,
     summary="Reporte de Rotacion de Inventario",
 )
-def get_inventory_rotation(
+async def get_inventory_rotation(
     days: int = Query(30, ge=1, le=365, description="Periodo para calcular las ventas"),
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_async_db),
     current_user: User = Security(get_current_user, scopes=["admin", "purchases:read"]),
 ):
     if settings.CELERY_TASK_ALWAYS_EAGER:
-        return report_service.get_inventory_rotation_report(db, days=days)
+        return await run_sync(db, report_service.get_inventory_rotation_report, days)
     async_result = report_tasks.generate_inventory_rotation_report.delay(days=days)
     return _execute_task(async_result, InventoryRotationReport)

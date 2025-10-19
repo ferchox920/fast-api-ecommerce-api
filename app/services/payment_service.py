@@ -1,10 +1,9 @@
 from __future__ import annotations
 
-from typing import Optional
-
 from fastapi import HTTPException, status
-from sqlalchemy.orm import Session
+from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.db.operations import run_sync
 from app.models.order import (
     Order,
     OrderStatus,
@@ -12,12 +11,12 @@ from app.models.order import (
     PaymentProvider,
     PaymentStatus,
 )
-from app.services.payment_providers import (
-    PaymentProviderError,
-    PaymentProviderConfigurationError,
-)
-from app.services.payment_providers import mercado_pago
 from app.services import order_service
+from app.services.payment_providers import (
+    PaymentProviderConfigurationError,
+    PaymentProviderError,
+    mercado_pago,
+)
 
 
 MERCADO_PAGO_STATUS_MAP = {
@@ -32,13 +31,13 @@ MERCADO_PAGO_STATUS_MAP = {
 }
 
 
-def _map_mp_status(value: Optional[str]) -> PaymentStatus:
+def _map_mp_status(value: str | None) -> PaymentStatus:
     if not value:
         return PaymentStatus.pending
     return MERCADO_PAGO_STATUS_MAP.get(value, PaymentStatus.pending)
 
 
-def create_payment_preference(db: Session, order: Order) -> Payment:
+async def create_payment_preference(db: AsyncSession, order: Order) -> Payment:
     if order.status not in [OrderStatus.pending_payment, OrderStatus.draft]:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "Order is not ready to pay")
     if not order.lines:
@@ -68,21 +67,35 @@ def create_payment_preference(db: Session, order: Order) -> Payment:
     db.add(payment)
     order.payment_status = PaymentStatus.pending
     db.add(order)
-    db.commit()
-    db.refresh(payment)
-    db.refresh(order)
+    await db.flush()
+    await db.refresh(payment)
+    await db.refresh(order)
     return payment
 
 
-def handle_mercado_pago_webhook(db: Session, payload: dict) -> None:
+async def handle_mercado_pago_webhook(db: AsyncSession, payload: dict) -> None:
     data = payload.get("data") or {}
     payment_id = data.get("id") or payload.get("resource")
     if not payment_id:
         return
 
-    payment = db.query(Payment).filter(Payment.provider_payment_id == str(payment_id)).first()
+    def _get_payment_id(sync_db):
+        record = (
+            sync_db.query(Payment.id)
+            .filter(Payment.provider_payment_id == str(payment_id))
+            .limit(1)
+            .first()
+        )
+        return record[0] if record else None
+
+    stored_payment_id = await run_sync(db, _get_payment_id)
+    if not stored_payment_id:
+        return
+
+    payment = await db.get(Payment, stored_payment_id)
     if not payment:
         return
+    order = await order_service.get_order(db, str(payment.order_id))
 
     try:
         mp_payment = mercado_pago.get_payment(str(payment_id))
@@ -90,7 +103,7 @@ def handle_mercado_pago_webhook(db: Session, payload: dict) -> None:
         payment.last_webhook = payload
         payment.status_detail = f"error: {exc}"
         db.add(payment)
-        db.commit()
+        await db.flush()
         return
 
     status_str = mp_payment.get("status")
@@ -101,14 +114,13 @@ def handle_mercado_pago_webhook(db: Session, payload: dict) -> None:
     payment.last_webhook = payload
     payment.provider_payment_id = str(mp_payment.get("id") or payment_id)
 
-    if payment.status == PaymentStatus.approved and payment.order.status != OrderStatus.paid:
-        db.add(payment)
-        db.flush()
-        order_service.set_status_paid(db, payment.order)
-        db.refresh(payment)
+    if payment.status == PaymentStatus.approved and order.status != OrderStatus.paid:
+        await db.flush()
+        await order_service.set_status_paid(db, order)
     else:
-        payment.order.payment_status = payment.status
-        db.add(payment.order)
+        order.payment_status = payment.status
+        db.add(order)
         db.add(payment)
-        db.commit()
-        db.refresh(payment)
+    await db.flush()
+    await db.refresh(payment)
+    return payment

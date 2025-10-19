@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 from uuid import UUID
 
@@ -12,5 +12,9 @@ def evaluate_wish_task(wish_id: str) -> None:
     db = SessionLocal()
     try:
         wish_service.evaluate_wish(db, UUID(wish_id))
+        db.commit()
+    except Exception:
+        db.rollback()
+        raise
     finally:
         db.close()

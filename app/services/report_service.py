@@ -199,6 +199,7 @@ def get_cost_analysis_report(db: Session, days: int = 30) -> CostAnalysisReport:
                 PurchaseOrderLine.qty_received * PurchaseOrderLine.unit_cost
             ).label("total_cost"),
         )
+        .select_from(PurchaseOrderLine)
         .join(ProductVariant, PurchaseOrderLine.variant_id == ProductVariant.id)
         .join(Product, ProductVariant.product_id == Product.id)
         .join(PurchaseOrder, PurchaseOrderLine.po_id == PurchaseOrder.id)
@@ -206,7 +207,12 @@ def get_cost_analysis_report(db: Session, days: int = 30) -> CostAnalysisReport:
             PurchaseOrder.created_at >= start_date,
             PurchaseOrderLine.qty_received > 0,
         )
-        .group_by(Product.id, ProductVariant.id)
+        .group_by(
+            Product.id,
+            ProductVariant.id,
+            Product.title,
+            ProductVariant.sku,
+        )
         .order_by(
             func.sum(
                 PurchaseOrderLine.qty_received * PurchaseOrderLine.unit_cost

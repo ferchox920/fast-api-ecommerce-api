@@ -1,13 +1,19 @@
+from __future__ import annotations
+
 from typing import Sequence
-from sqlalchemy.orm import Session
-from sqlalchemy import select
-from fastapi import HTTPException
-import uuid
 import re
 import unicodedata
+import uuid
 
+from fastapi import HTTPException
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.db.operations import flush_async, refresh_async
 from app.models.product import Category
+from app.schemas.category import CategoryUpdate
 from app.schemas.product import CategoryCreate
+
 
 # ---------------- Utils ----------------
 def _slugify(text: str) -> str:
@@ -17,6 +23,7 @@ def _slugify(text: str) -> str:
     text = re.sub(r"\s+", "-", text.strip())
     return text.lower()
 
+
 def _as_uuid(value: str | uuid.UUID | None, field: str) -> uuid.UUID | None:
     if value is None:
         return None
@@ -24,72 +31,100 @@ def _as_uuid(value: str | uuid.UUID | None, field: str) -> uuid.UUID | None:
         return value
     try:
         return uuid.UUID(str(value))
-    except Exception:
-        raise HTTPException(status_code=422, detail=f"Invalid UUID for {field}")
+    except Exception as exc:  # pragma: no cover - defensive
+        raise HTTPException(status_code=422, detail=f"Invalid UUID for {field}") from exc
 
-def _name_exists(db: Session, name: str) -> bool:
-    return db.query(Category).filter(Category.name == name).first() is not None
 
-def _slug_exists(db: Session, slug: str) -> bool:
-    return db.query(Category).filter(Category.slug == slug).first() is not None
+async def _name_exists(db: AsyncSession, name: str) -> bool:
+    stmt = select(Category.id).where(Category.name == name).limit(1)
+    result = await db.execute(stmt)
+    return result.scalar_one_or_none() is not None
+
+
+async def _slug_exists(db: AsyncSession, slug: str) -> bool:
+    stmt = select(Category.id).where(Category.slug == slug).limit(1)
+    result = await db.execute(stmt)
+    return result.scalar_one_or_none() is not None
+
 
 # ---------------- Lectura pública ----------------
-def list_active_categories(db: Session) -> Sequence[Category]:
-    stmt = select(Category).where(Category.active == True).order_by(Category.created_at.desc())  # noqa: E712
-    return db.execute(stmt).scalars().all()
+async def list_active_categories(db: AsyncSession) -> Sequence[Category]:
+    stmt = (
+        select(Category)
+        .where(Category.active.is_(True))
+        .order_by(Category.created_at.desc())
+    )
+    result = await db.execute(stmt)
+    return result.scalars().all()
 
-def list_all_categories(db: Session) -> Sequence[Category]:
+
+async def list_all_categories(db: AsyncSession) -> Sequence[Category]:
     stmt = select(Category).order_by(Category.created_at.desc())
-    return db.execute(stmt).scalars().all()
+    result = await db.execute(stmt)
+    return result.scalars().all()
 
-def get_category_by_id(db: Session, category_id: str) -> Category | None:
-    return db.get(Category, _as_uuid(category_id, "category_id"))
 
-def get_category_by_slug(db: Session, slug: str) -> Category | None:
-    return db.query(Category).filter(Category.slug == slug, Category.active == True).first()  # noqa: E712
+async def get_category_by_id(db: AsyncSession, category_id: str) -> Category | None:
+    return await db.get(Category, _as_uuid(category_id, "category_id"))
+
+
+async def get_category_by_slug(db: AsyncSession, slug: str) -> Category | None:
+    stmt = (
+        select(Category)
+        .where(Category.slug == slug)
+        .where(Category.active.is_(True))
+        .limit(1)
+    )
+    result = await db.execute(stmt)
+    return result.scalars().first()
+
 
 # ---------------- Admin CRUD ----------------
-def create_category(db: Session, payload: CategoryCreate) -> Category:
+async def create_category(db: AsyncSession, payload: CategoryCreate) -> Category:
     data = payload.model_dump()
 
-    # slug opcional: generar desde name si no viene
     raw_slug = (data.get("slug") or "").strip()
     slug = _slugify(raw_slug or data["name"])
 
-    # unicidad (capa de aplicación, además de unique en DB)
-    if _name_exists(db, data["name"]):
+    if await _name_exists(db, data["name"]):
         raise HTTPException(status_code=400, detail="Category name already exists")
-    if _slug_exists(db, slug):
+    if await _slug_exists(db, slug):
         raise HTTPException(status_code=400, detail="Category slug already exists")
 
-    cat = Category(name=data["name"], slug=slug, description=data.get("description"))
-    db.add(cat); db.commit(); db.refresh(cat)
-    return cat
+    category = Category(
+        name=data["name"],
+        slug=slug,
+        description=data.get("description"),
+        active=data.get("active", True),
+    )
+    db.add(category)
+    await flush_async(db, category)
+    await refresh_async(db, category)
+    return category
 
-def update_category(db: Session, category: Category, name: str | None = None, slug: str | None = None, description: str | None = None, active: bool | None = None) -> Category:
-    changes: dict = {}
 
-    if name is not None and name != category.name:
-        if _name_exists(db, name):
+async def update_category(db: AsyncSession, category: Category, payload: CategoryUpdate) -> Category:
+    changes = payload.model_dump(exclude_unset=True)
+
+    if "name" in changes and changes["name"] != category.name:
+        if await _name_exists(db, changes["name"]):
             raise HTTPException(status_code=400, detail="Category name already exists")
-        changes["name"] = name
 
-    if slug is not None:
-        new_slug = _slugify(slug) if slug else _slugify(changes.get("name", category.name))
-        if new_slug != category.slug and _slug_exists(db, new_slug):
+    if "slug" in changes:
+        target = changes["slug"] or changes.get("name", category.name)
+        new_slug = _slugify(target)
+        if new_slug != category.slug and await _slug_exists(db, new_slug):
             raise HTTPException(status_code=400, detail="Category slug already exists")
         changes["slug"] = new_slug
 
-    if description is not None:
-        changes["description"] = description
-    if active is not None:
-        changes["active"] = bool(active)
+    for field, value in changes.items():
+        setattr(category, field, value)
 
-    for k, v in changes.items():
-        setattr(category, k, v)
-
-    db.add(category); db.commit(); db.refresh(category)
+    db.add(category)
+    await flush_async(db, category)
+    await refresh_async(db, category)
     return category
 
-def delete_category(db: Session, category: Category) -> None:
-    db.delete(category); db.commit()
+
+async def delete_category(db: AsyncSession, category: Category) -> None:
+    await db.delete(category)

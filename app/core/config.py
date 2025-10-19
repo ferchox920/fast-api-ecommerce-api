@@ -3,7 +3,7 @@
 
 from pathlib import Path
 
-from pydantic import Field, field_validator
+from pydantic import Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -24,6 +24,7 @@ class Settings(BaseSettings):
     SECRET_KEY: str = Field(..., min_length=16)
     REFRESH_SECRET_KEY: str | None = None
     DATABASE_URL: str = "sqlite:///./test.db"
+    ASYNC_DATABASE_URL: str | None = None
 
     # --- Tokens ---
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 60
@@ -90,6 +91,41 @@ class Settings(BaseSettings):
         if not value or value.lower() == "changeme":
             raise ValueError("SECRET_KEY must be set to a non-default, secure value.")
         return value
+
+    @model_validator(mode="after")
+    def ensure_async_database_url(self) -> "Settings":
+        """Ensure an async URL is always available."""
+        if not self.ASYNC_DATABASE_URL:
+            self.ASYNC_DATABASE_URL = self._derive_async_url(self.DATABASE_URL)
+        return self
+
+    @staticmethod
+    def _derive_async_url(url: str) -> str:
+        """Best-effort conversion from sync to async driver."""
+        if "+asyncpg" in url or "+aiosqlite" in url:
+            return url
+        if url.startswith("sqlite"):
+            return url.replace("sqlite", "sqlite+aiosqlite", 1)
+        if "://" not in url:
+            return url
+
+        scheme, rest = url.split("://", 1)
+        if scheme.startswith("postgres"):
+            base = "postgresql"
+            driver = None
+            if "+" in scheme:
+                base_part, driver_part = scheme.split("+", 1)
+                base = "postgresql" if base_part.startswith("postgres") else base_part
+                driver = driver_part
+            if driver in (None, "", "psycopg", "psycopg2", "psycopg2cffi"):
+                async_scheme = f"{base}+asyncpg"
+            elif driver == "asyncpg":
+                async_scheme = f"{base}+asyncpg"
+            else:
+                async_scheme = f"{base}+{driver}"
+            return f"{async_scheme}://{rest}"
+
+        return url
 
     @property
     def refresh_secret_fallback(self) -> str:
