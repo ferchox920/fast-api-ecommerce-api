@@ -173,16 +173,13 @@ async def receive_po(db: AsyncSession, po: PurchaseOrder, payload: POReceivePayl
 
         reason = payload.reason or f"PO {po.id}"
 
-        def _run_receive(sync_db):
-            variant_sync = sync_db.get(ProductVariant, line.variant_id)
-            if not variant_sync:
-                raise ResourceNotFoundError("Variant not found")
-            try:
-                inventory_service.receive_stock(sync_db, variant_sync, item.quantity, reason)
-            except ServiceError as exc:
-                raise ConflictError(str(exc))
-
-        await db.run_sync(_run_receive)
+        variant = await db.get(ProductVariant, line.variant_id)
+        if not variant:
+            raise ResourceNotFoundError("Variant not found")
+        try:
+            await inventory_service.receive_stock(db, variant, item.quantity, reason)
+        except ServiceError as exc:
+            raise ConflictError(str(exc)) from exc
 
     total_remaining = sum(line.qty_ordered - line.qty_received for line in po.lines)
     po.status = POStatus.received if total_remaining == 0 else POStatus.partially_received
@@ -218,9 +215,7 @@ async def get_po(db: AsyncSession, po_id: str) -> PurchaseOrder:
 async def create_po_from_suggestions(db: AsyncSession, supplier_id: str) -> PurchaseOrder:
     supplier = await _get_supplier_or_raise(db, supplier_id)
 
-    suggestions = await db.run_sync(
-        lambda sync_db: inventory_service.compute_replenishment_suggestion(sync_db, supplier_id=supplier.id)
-    )
+    suggestions = await inventory_service.compute_replenishment_suggestion(db, supplier_id=supplier.id)
     if not suggestions.lines:
         raise ConflictError("No replenishment suggestions found for this supplier")
 

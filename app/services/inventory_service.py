@@ -1,40 +1,58 @@
-from sqlalchemy.orm import Session
-from sqlalchemy import select
+from __future__ import annotations
+
 import uuid
+
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.inventory import InventoryMovement, MovementKind
 from app.models.product import ProductVariant
+from app.models.purchase import PurchaseOrderLine
+from app.schemas.inventory_replenishment import (
+    ReplenishmentLine,
+    ReplenishmentSuggestion,
+    StockAlert,
+)
 from app.services.exceptions import (
-    InvalidQuantityError,
-    InsufficientStockError,
     InsufficientReservationError,
+    InsufficientStockError,
+    InvalidQuantityError,
 )
 
-# Clave para no repetir el ensure por sesión/bind
 _MOVEMENTS_READY_KEY = "inventory_movements_ready"
 
 
-def _ensure_movements_table(db: Session) -> None:
-    """
-    Garantiza que 'inventory_movements' exista usando la definición ORM.
-    Se ejecuta solo una vez por bind gracias a db.info.
-    """
+async def _ensure_movements_table(db: AsyncSession) -> None:
     if db.info.get(_MOVEMENTS_READY_KEY):
         return
 
-    InventoryMovement.__table__.create(bind=db.get_bind(), checkfirst=True)
+    def _create_table(sync_session) -> None:
+        InventoryMovement.__table__.create(bind=sync_session.bind, checkfirst=True)
+
+    await db.run_sync(_create_table)
     db.info[_MOVEMENTS_READY_KEY] = True
 
 
-def _log_movement(db: Session, variant: ProductVariant, mtype: MovementKind, qty: int, reason: str | None) -> None:
-    _ensure_movements_table(db)
-    movement = InventoryMovement(variant_id=variant.id, type=mtype, quantity=int(qty), reason=reason)
+async def _log_movement(
+    db: AsyncSession,
+    variant: ProductVariant,
+    mtype: MovementKind,
+    qty: int,
+    reason: str | None,
+) -> None:
+    await _ensure_movements_table(db)
+    movement = InventoryMovement(
+        variant_id=variant.id,
+        type=mtype,
+        quantity=int(qty),
+        reason=reason,
+    )
     db.add(movement)
-    db.flush([movement])
+    await db.flush([movement])
 
 
-def _log_and_add_movement(
-    db: Session,
+async def _log_and_add_movement(
+    db: AsyncSession,
     variant: ProductVariant,
     mtype: MovementKind,
     qty: int,
@@ -42,44 +60,70 @@ def _log_and_add_movement(
 ) -> ProductVariant:
     """Helper para añadir la variante a la sesión y registrar el movimiento, sin commit."""
     db.add(variant)
-    _log_movement(db, variant, mtype, qty, reason)
+    await db.flush([variant])
+    await _log_movement(db, variant, mtype, qty, reason)
     return variant
 
 
-def receive_stock(db: Session, variant: ProductVariant, quantity: int, reason: str | None = None) -> ProductVariant:
+async def receive_stock(
+    db: AsyncSession,
+    variant: ProductVariant,
+    quantity: int,
+    reason: str | None = None,
+) -> ProductVariant:
     if quantity <= 0:
         raise InvalidQuantityError("La cantidad debe ser mayor que 0.")
     variant.stock_on_hand += quantity
-    return _log_and_add_movement(db, variant, MovementKind.RECEIVE, quantity, reason)
+    return await _log_and_add_movement(db, variant, MovementKind.RECEIVE, quantity, reason)
 
 
-def adjust_stock(db: Session, variant: ProductVariant, quantity: int, reason: str | None = None) -> ProductVariant:
+async def adjust_stock(
+    db: AsyncSession,
+    variant: ProductVariant,
+    quantity: int,
+    reason: str | None = None,
+) -> ProductVariant:
     new_on_hand = variant.stock_on_hand + quantity
     if new_on_hand < 0:
         raise InsufficientStockError("El stock no puede quedar en negativo.")
     variant.stock_on_hand = new_on_hand
-    return _log_and_add_movement(db, variant, MovementKind.ADJUST, abs(quantity), reason)
+    return await _log_and_add_movement(db, variant, MovementKind.ADJUST, abs(quantity), reason)
 
 
-def reserve_stock(db: Session, variant: ProductVariant, quantity: int, reason: str | None = None) -> ProductVariant:
+async def reserve_stock(
+    db: AsyncSession,
+    variant: ProductVariant,
+    quantity: int,
+    reason: str | None = None,
+) -> ProductVariant:
     if quantity <= 0:
         raise InvalidQuantityError("La cantidad debe ser mayor que 0.")
     if variant.stock_reserved + quantity > variant.stock_on_hand:
         raise InsufficientStockError("No hay stock disponible suficiente para reservar la cantidad solicitada.")
     variant.stock_reserved += quantity
-    return _log_and_add_movement(db, variant, MovementKind.RESERVE, quantity, reason)
+    return await _log_and_add_movement(db, variant, MovementKind.RESERVE, quantity, reason)
 
 
-def release_stock(db: Session, variant: ProductVariant, quantity: int, reason: str | None = None) -> ProductVariant:
+async def release_stock(
+    db: AsyncSession,
+    variant: ProductVariant,
+    quantity: int,
+    reason: str | None = None,
+) -> ProductVariant:
     if quantity <= 0:
         raise InvalidQuantityError("La cantidad debe ser mayor que 0.")
     if quantity > variant.stock_reserved:
         raise InsufficientReservationError("No se puede liberar más stock del que está reservado.")
     variant.stock_reserved -= quantity
-    return _log_and_add_movement(db, variant, MovementKind.RELEASE, quantity, reason)
+    return await _log_and_add_movement(db, variant, MovementKind.RELEASE, quantity, reason)
 
 
-def commit_sale(db: Session, variant: ProductVariant, quantity: int, reason: str | None = None) -> ProductVariant:
+async def commit_sale(
+    db: AsyncSession,
+    variant: ProductVariant,
+    quantity: int,
+    reason: str | None = None,
+) -> ProductVariant:
     if quantity <= 0:
         raise InvalidQuantityError("La cantidad debe ser mayor que 0.")
 
@@ -93,19 +137,25 @@ def commit_sale(db: Session, variant: ProductVariant, quantity: int, reason: str
     if variant.stock_on_hand < 0:
         raise InsufficientStockError("El stock no puede quedar en negativo.")
 
-    return _log_and_add_movement(db, variant, MovementKind.SALE, quantity, reason)
+    return await _log_and_add_movement(db, variant, MovementKind.SALE, quantity, reason)
 
 
-def list_movements(db: Session, variant: ProductVariant, limit: int = 50, offset: int = 0):
-    _ensure_movements_table(db)
-    rows = (
-        db.query(InventoryMovement)
-        .filter(InventoryMovement.variant_id == variant.id)
+async def list_movements(
+    db: AsyncSession,
+    variant: ProductVariant,
+    limit: int = 50,
+    offset: int = 0,
+) -> list[dict]:
+    await _ensure_movements_table(db)
+    stmt = (
+        select(InventoryMovement)
+        .where(InventoryMovement.variant_id == variant.id)
         .order_by(InventoryMovement.created_at.desc())
         .offset(int(offset))
         .limit(int(limit))
-        .all()
     )
+    result = await db.execute(stmt)
+    rows = result.scalars().all()
     return [
         {
             "id": str(row.id),
@@ -118,58 +168,66 @@ def list_movements(db: Session, variant: ProductVariant, limit: int = 50, offset
     ]
 
 
-# ========================
-# Alerts & Replenishment
-# ========================
-from app.models.purchase import PurchaseOrderLine  # para último costo
-from app.schemas.inventory_replenishment import (
-    StockAlert,
-    ReplenishmentSuggestion,
-    ReplenishmentLine,
-)
+def _available(variant: ProductVariant) -> int:
+    return int(variant.stock_on_hand) - int(variant.stock_reserved)
 
 
-def _available(v: ProductVariant) -> int:
-    return int(v.stock_on_hand) - int(v.stock_reserved)
-
-
-def compute_stock_alerts(db: Session, supplier_id: uuid.UUID | str | None = None) -> list[StockAlert]:
+async def compute_stock_alerts(
+    db: AsyncSession,
+    supplier_id: uuid.UUID | str | None = None,
+) -> list[StockAlert]:
     stmt = select(ProductVariant)
     if supplier_id:
         sid = uuid.UUID(str(supplier_id))
         stmt = stmt.where(ProductVariant.primary_supplier_id == sid)
-    variants = db.execute(stmt).scalars().all()
+    variants = (await db.execute(stmt)).scalars().all()
 
     alerts: list[StockAlert] = []
-    for v in variants:
-        avail = _available(v)
-        if avail <= int(v.reorder_point):
-            missing = max(0, int(v.reorder_point) - avail)
+    for variant in variants:
+        avail = _available(variant)
+        if avail <= int(variant.reorder_point):
+            missing = max(0, int(variant.reorder_point) - avail)
             alerts.append(
                 StockAlert(
-                    variant_id=v.id,
+                    variant_id=variant.id,
                     available=avail,
-                    reorder_point=int(v.reorder_point),
+                    reorder_point=int(variant.reorder_point),
                     missing=missing,
                 )
             )
     return alerts
 
 
-def compute_replenishment_suggestion(db: Session, supplier_id: uuid.UUID | str | None = None) -> ReplenishmentSuggestion:
-    alerts = compute_stock_alerts(db, supplier_id)
+async def _get_last_unit_cost(db: AsyncSession, variant_id: uuid.UUID) -> float | None:
+    stmt = (
+        select(PurchaseOrderLine.unit_cost)
+        .where(PurchaseOrderLine.variant_id == variant_id)
+        .order_by(PurchaseOrderLine.id.desc())
+        .limit(1)
+    )
+    row = (await db.execute(stmt)).first()
+    return float(row[0]) if row else None
+
+
+async def compute_replenishment_suggestion(
+    db: AsyncSession,
+    supplier_id: uuid.UUID | str | None = None,
+) -> ReplenishmentSuggestion:
+    alerts = await compute_stock_alerts(db, supplier_id)
     lines: list[ReplenishmentLine] = []
 
-    for a in alerts:
-        v = db.get(ProductVariant, a.variant_id)
-        suggested = max(1, max(a.missing, int(v.reorder_qty or 0)))
-        last_cost = _get_last_unit_cost(db, a.variant_id)
+    for alert in alerts:
+        variant = await db.get(ProductVariant, alert.variant_id)
+        if not variant:
+            continue
+        suggested = max(1, max(alert.missing, int(variant.reorder_qty or 0)))
+        last_cost = await _get_last_unit_cost(db, alert.variant_id)
 
         lines.append(
             ReplenishmentLine(
-                variant_id=a.variant_id,
+                variant_id=alert.variant_id,
                 suggested_qty=suggested,
-                reason=f"available({a.available}) <= reorder_point({a.reorder_point})",
+                reason=f"available({alert.available}) <= reorder_point({alert.reorder_point})",
                 last_unit_cost=last_cost,
             )
         )
@@ -178,15 +236,3 @@ def compute_replenishment_suggestion(db: Session, supplier_id: uuid.UUID | str |
         supplier_id=uuid.UUID(str(supplier_id)) if supplier_id else None,
         lines=sorted(lines, key=lambda line: str(line.variant_id)),
     )
-
-
-def _get_last_unit_cost(db: Session, variant_id: uuid.UUID) -> float | None:
-    row = (
-        db.execute(
-            select(PurchaseOrderLine.unit_cost)
-            .where(PurchaseOrderLine.variant_id == variant_id)
-            .order_by(PurchaseOrderLine.id.desc())
-            .limit(1)
-        ).first()
-    )
-    return float(row[0]) if row else None

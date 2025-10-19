@@ -226,9 +226,7 @@ async def replenishment_alerts(
     db: AsyncSession = Depends(get_async_db),
     current_user: User = Security(get_current_user, scopes=["purchases:read"]),
 ):
-    return await db.run_sync(
-        lambda sync_db: inventory_service.compute_stock_alerts(sync_db, supplier_id)
-    )
+    return await inventory_service.compute_stock_alerts(db, supplier_id)
 
 
 @router.get(
@@ -240,6 +238,4 @@ async def replenishment_suggestions(
     db: AsyncSession = Depends(get_async_db),
     current_user: User = Security(get_current_user, scopes=["purchases:read"]),
 ):
-    return await db.run_sync(
-        lambda sync_db: inventory_service.compute_replenishment_suggestion(sync_db, supplier_id)
-    )
+    return await inventory_service.compute_replenishment_suggestion(db, supplier_id)

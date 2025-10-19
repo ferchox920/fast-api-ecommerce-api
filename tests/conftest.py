@@ -15,6 +15,7 @@ import pytest_asyncio
 import httpx
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker, Session
+from sqlalchemy.ext.asyncio import AsyncSession
 from typing import Generator
 
 os.environ.setdefault("DATABASE_URL", "sqlite:///./test.db")
@@ -22,6 +23,7 @@ os.environ.setdefault("ASYNC_DATABASE_URL", "sqlite+aiosqlite:///./test.db")
 
 from app.main import app
 from app.db.session import Base
+from app.db.session_async import AsyncSessionLocal
 from app.core.security import get_password_hash
 from app.models.user import User
 
@@ -70,6 +72,16 @@ async def client():
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as ac:
         yield ac
     app.dependency_overrides.clear()
+
+
+@pytest_asyncio.fixture(scope="function")
+async def async_db_session() -> AsyncSession:
+    """Provee una AsyncSession para pruebas asíncronas directas."""
+    async with AsyncSessionLocal() as session:
+        try:
+            yield session
+        finally:
+            await session.rollback()
 
 
 # --- Fixtures de Usuarios (Sincrónicas, usan la sesión transaccional) ---

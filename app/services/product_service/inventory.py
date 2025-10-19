@@ -1,10 +1,10 @@
 # app/services/product_service/inventory.py
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 
 from fastapi import HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.db.operations import flush_async, refresh_async, run_sync
+from app.db.operations import refresh_async
 from app.models.product import ProductVariant
 from app.services import inventory_service
 from app.services.exceptions import ServiceError
@@ -13,15 +13,14 @@ from app.services.exceptions import ServiceError
 async def _run_inventory_action(
     db: AsyncSession,
     variant: ProductVariant,
-    action: Callable[..., ProductVariant],
+    action: Callable[..., Awaitable[ProductVariant]],
     *args,
 ) -> ProductVariant:
     try:
-        await run_sync(db, action, variant, *args)
+        await action(db, variant, *args)
     except ServiceError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=exc.detail) from exc
 
-    await flush_async(db, variant)
     await refresh_async(db, variant)
     return variant
 
@@ -47,4 +46,4 @@ async def commit_sale(db: AsyncSession, variant: ProductVariant, quantity: int, 
 
 
 async def list_movements(db: AsyncSession, variant: ProductVariant, limit: int = 50, offset: int = 0):
-    return await run_sync(db, inventory_service.list_movements, variant, limit, offset)
+    return await inventory_service.list_movements(db, variant, limit, offset)

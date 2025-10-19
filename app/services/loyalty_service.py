@@ -1,11 +1,11 @@
 from __future__ import annotations
 
 from datetime import date
-from typing import Optional
 
 from sqlalchemy import select
-from sqlalchemy.orm import Session
+from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.db.operations import flush_async, refresh_async, run_sync
 from app.models.engagement import CustomerEngagementDaily
 from app.models.loyalty import LoyaltyLevel, LoyaltyProfile, LoyaltyHistory
 from app.schemas.engagement import EventCreate
@@ -21,43 +21,53 @@ DEFAULT_LEVELS = [
 ]
 
 
-def ensure_levels(db: Session) -> None:
+async def ensure_levels(db: AsyncSession) -> None:
+    levels_created = False
     for level in DEFAULT_LEVELS:
-        if not db.get(LoyaltyLevel, level["level"]):
+        existing = await db.get(LoyaltyLevel, level["level"])
+        if not existing:
             db.add(LoyaltyLevel(level=level["level"], min_points=level["min_points"], perks_json=level["perks_json"]))
-    db.commit()
+            levels_created = True
+    if levels_created:
+        await flush_async(db)
 
 
-def _get_profile(db: Session, user_id: str) -> LoyaltyProfile:
-    profile = db.get(LoyaltyProfile, user_id)
+async def _get_profile(db: AsyncSession, user_id: str) -> LoyaltyProfile:
+    profile = await db.get(LoyaltyProfile, user_id)
     if not profile:
-        ensure_levels(db)
+        await ensure_levels(db)
         profile = LoyaltyProfile(customer_id=user_id, level="bronze", points=0, progress_json={})
         db.add(profile)
-        db.commit()
-        db.refresh(profile)
+        await flush_async(db, profile)
+        await refresh_async(db, profile)
     return profile
 
 
-def _determine_level(db: Session, points: int) -> LoyaltyLevel:
-    levels = db.execute(select(LoyaltyLevel).order_by(LoyaltyLevel.min_points.desc())).scalars().all()
+async def _determine_level(db: AsyncSession, points: int) -> LoyaltyLevel:
+    result = await db.execute(select(LoyaltyLevel).order_by(LoyaltyLevel.min_points.desc()))
+    levels = result.scalars().all()
+    if not levels:
+        await ensure_levels(db)
+        result = await db.execute(select(LoyaltyLevel).order_by(LoyaltyLevel.min_points.desc()))
+        levels = result.scalars().all()
+    if not levels:
+        raise RuntimeError("No loyalty levels configured")
     for level in levels:
         if points >= level.min_points:
             return level
     return levels[-1]
 
 
-def process_purchase_event(db: Session, event: EventCreate, event_date: date) -> None:
-    # INTEGRATION: user_id puede ser anónimo (cookie/device_id); reconciliar al loguearse.
+async def process_purchase_event(db: AsyncSession, event: EventCreate, event_date: date) -> None:
     if not event.user_id:
         return
-    profile = _get_profile(db, str(event.user_id))
+    profile = await _get_profile(db, str(event.user_id))
     quantity = event.metadata.quantity if event.metadata and event.metadata.quantity else 1
     base_points = max(10, int(event.price or 0))
     points_delta = base_points * quantity
     profile.points += points_delta
 
-    new_level = _determine_level(db, profile.points)
+    new_level = await _determine_level(db, profile.points)
     prev_level = profile.level
     profile.level = new_level.level
 
@@ -70,22 +80,21 @@ def process_purchase_event(db: Session, event: EventCreate, event_date: date) ->
     )
     db.add(history)
 
-    daily = (
-        db.execute(
-            select(CustomerEngagementDaily)
-            .where(CustomerEngagementDaily.customer_id == str(event.user_id))
-            .where(CustomerEngagementDaily.date == event_date)
-        ).scalar_one_or_none()
+    result = await db.execute(
+        select(CustomerEngagementDaily)
+        .where(CustomerEngagementDaily.customer_id == str(event.user_id))
+        .where(CustomerEngagementDaily.date == event_date)
     )
+    daily = result.scalar_one_or_none()
     if daily:
         daily.points_earned += points_delta
 
     db.add(profile)
-    db.commit()
-    db.refresh(profile)
+    await flush_async(db, profile, history)
+    await refresh_async(db, profile)
 
     if prev_level != new_level.level:
-        notification_service.notify_loyalty_upgrade(db, profile, prev_level)
+        await run_sync(db, notification_service.notify_loyalty_upgrade, profile, prev_level)
         emit_loyalty_event(
             "loyalty_upgrade",
             {
@@ -97,14 +106,14 @@ def process_purchase_event(db: Session, event: EventCreate, event_date: date) ->
         )
 
 
-def get_profile(db: Session, user_id: str) -> LoyaltyProfile:
-    return _get_profile(db, user_id)
+async def get_profile(db: AsyncSession, user_id: str) -> LoyaltyProfile:
+    return await _get_profile(db, user_id)
 
 
-def apply_adjustment(db: Session, payload: LoyaltyAdjustPayload) -> LoyaltyProfile:
-    profile = _get_profile(db, payload.user_id)
+async def apply_adjustment(db: AsyncSession, payload: LoyaltyAdjustPayload) -> LoyaltyProfile:
+    profile = await _get_profile(db, payload.user_id)
     profile.points = max(0, profile.points + payload.points_delta)
-    new_level = _determine_level(db, profile.points)
+    new_level = await _determine_level(db, profile.points)
     prev_level = profile.level
     profile.level = new_level.level
 
@@ -117,11 +126,11 @@ def apply_adjustment(db: Session, payload: LoyaltyAdjustPayload) -> LoyaltyProfi
     )
     db.add(history)
     db.add(profile)
-    db.commit()
-    db.refresh(profile)
+    await flush_async(db, profile, history)
+    await refresh_async(db, profile)
 
     if prev_level != profile.level:
-        notification_service.notify_loyalty_upgrade(db, profile, prev_level)
+        await run_sync(db, notification_service.notify_loyalty_upgrade, profile, prev_level)
         emit_loyalty_event(
             "loyalty_upgrade",
             {
@@ -135,10 +144,10 @@ def apply_adjustment(db: Session, payload: LoyaltyAdjustPayload) -> LoyaltyProfi
     return profile
 
 
-def redeem_reward(db: Session, payload: LoyaltyRedeemPayload) -> LoyaltyProfile:
+async def redeem_reward(db: AsyncSession, payload: LoyaltyRedeemPayload) -> LoyaltyProfile:
     if not payload.user_id:
         raise ValueError("user_required")
-    profile = _get_profile(db, payload.user_id)
+    profile = await _get_profile(db, payload.user_id)
     if profile.points < payload.points:
         raise ValueError("insufficient_points")
 
@@ -155,8 +164,8 @@ def redeem_reward(db: Session, payload: LoyaltyRedeemPayload) -> LoyaltyProfile:
     )
     db.add(history)
     db.add(profile)
-    db.commit()
-    db.refresh(profile)
+    await flush_async(db, profile, history)
+    await refresh_async(db, profile)
 
     emit_loyalty_event(
         "loyalty_redeem",
@@ -169,7 +178,7 @@ def redeem_reward(db: Session, payload: LoyaltyRedeemPayload) -> LoyaltyProfile:
     return profile
 
 
-def list_levels(db: Session):
-    ensure_levels(db)
-    return db.execute(select(LoyaltyLevel).order_by(LoyaltyLevel.min_points)).scalars().all()
-
+async def list_levels(db: AsyncSession):
+    await ensure_levels(db)
+    result = await db.execute(select(LoyaltyLevel).order_by(LoyaltyLevel.min_points))
+    return result.scalars().all()

@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 from datetime import datetime, timezone
 from typing import Optional
@@ -6,8 +6,9 @@ from uuid import UUID
 
 from fastapi import HTTPException, status
 from sqlalchemy import select
-from sqlalchemy.orm import Session
+from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.db.operations import flush_async, refresh_async, run_sync
 from app.models.promotion import Promotion, PromotionStatus, PromotionType
 from app.schemas.promotion import PromotionCreate, PromotionUpdate
 from app.services import notification_service
@@ -18,7 +19,7 @@ def _is_time_active(promotion: Promotion, now: datetime) -> bool:
     return promotion.start_at <= now <= promotion.end_at
 
 
-def create_promotion(db: Session, payload: PromotionCreate) -> Promotion:
+async def create_promotion(db: AsyncSession, payload: PromotionCreate) -> Promotion:
     promotion = Promotion(
         name=payload.name,
         description=payload.description,
@@ -31,35 +32,39 @@ def create_promotion(db: Session, payload: PromotionCreate) -> Promotion:
         status=PromotionStatus.draft,
     )
     db.add(promotion)
-    db.commit()
-    db.refresh(promotion)
+    await flush_async(db, promotion)
+    await refresh_async(db, promotion)
     return promotion
 
 
-def list_promotions(db: Session, status_filter: Optional[str] = None):
+async def list_promotions(db: AsyncSession, status_filter: Optional[str] = None):
     stmt = select(Promotion)
     if status_filter:
         stmt = stmt.where(Promotion.status == PromotionStatus(status_filter))
-    return db.execute(stmt.order_by(Promotion.start_at.desc())).scalars().all()
+    result = await db.execute(stmt.order_by(Promotion.start_at.desc()))
+    return result.scalars().all()
 
 
-def list_active_promotions(db: Session):
+async def list_active_promotions(db: AsyncSession):
     now = datetime.now(timezone.utc)
-    promotions = db.execute(
+    result = await db.execute(
         select(Promotion).where(Promotion.status == PromotionStatus.active)
-    ).scalars().all()
+    )
+    promotions = result.scalars().all()
     return [promo for promo in promotions if _is_time_active(promo, now)]
 
 
-def get_promotion(db: Session, promotion_id: UUID) -> Promotion:
-    promotion = db.get(Promotion, promotion_id)
+async def get_promotion(db: AsyncSession, promotion_id: UUID) -> Promotion:
+    promotion = await db.get(Promotion, promotion_id)
     if not promotion:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Promotion not found")
     return promotion
 
 
-def update_promotion(db: Session, promotion_id: UUID, payload: PromotionUpdate) -> Promotion:
-    promotion = get_promotion(db, promotion_id)
+async def update_promotion(
+    db: AsyncSession, promotion_id: UUID, payload: PromotionUpdate
+) -> Promotion:
+    promotion = await get_promotion(db, promotion_id)
     if payload.name is not None:
         promotion.name = payload.name
     if payload.description is not None:
@@ -77,19 +82,18 @@ def update_promotion(db: Session, promotion_id: UUID, payload: PromotionUpdate) 
     if payload.status is not None:
         promotion.status = PromotionStatus(payload.status)
     db.add(promotion)
-    db.commit()
-    db.refresh(promotion)
+    await flush_async(db, promotion)
+    await refresh_async(db, promotion)
     return promotion
 
 
-def activate_promotion(db: Session, promotion_id: UUID) -> Promotion:
-    promotion = get_promotion(db, promotion_id)
+async def activate_promotion(db: AsyncSession, promotion_id: UUID) -> Promotion:
+    promotion = await get_promotion(db, promotion_id)
     promotion.status = PromotionStatus.active
     db.add(promotion)
-    db.commit()
-    db.refresh(promotion)
-    # INTEGRATION: Notificaciones (email/WS) consumirán 'promotion_start'; aquí invocamos adaptador directo.
-    notification_service.notify_new_promotion(db, promotion)
+    await flush_async(db, promotion)
+    await refresh_async(db, promotion)
+    await run_sync(db, notification_service.notify_new_promotion, promotion)
     emit_promotion_event(
         "promotion_start",
         {
@@ -102,12 +106,12 @@ def activate_promotion(db: Session, promotion_id: UUID) -> Promotion:
     return promotion
 
 
-def deactivate_promotion(db: Session, promotion_id: UUID) -> Promotion:
-    promotion = get_promotion(db, promotion_id)
+async def deactivate_promotion(db: AsyncSession, promotion_id: UUID) -> Promotion:
+    promotion = await get_promotion(db, promotion_id)
     promotion.status = PromotionStatus.expired
     db.add(promotion)
-    db.commit()
-    db.refresh(promotion)
+    await flush_async(db, promotion)
+    await refresh_async(db, promotion)
     emit_promotion_event(
         "promotion_end",
         {
@@ -160,5 +164,4 @@ def evaluate_eligibility(
     if min_order_total and (order_total or 0) < min_order_total:
         return False, ["order_total_too_low"]
 
-    # INTEGRATION: Checkout aplicará "benefits_json" (descuentos/cupones) y devolverá "applied_benefits".
     return True, ["eligible"]

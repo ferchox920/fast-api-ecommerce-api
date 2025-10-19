@@ -7,13 +7,13 @@ from pydantic import BaseModel, Field, ConfigDict
 
 
 class LoyaltyProfileRead(BaseModel):
-    user_id: str
+    user_id: str = Field(validation_alias="customer_id")
     level: str
     points: int
     progress_json: dict
     updated_at: datetime
 
-    model_config = ConfigDict(from_attributes=True)
+    model_config = ConfigDict(from_attributes=True, populate_by_name=True)
 
 
 class LoyaltyAdjustPayload(BaseModel):

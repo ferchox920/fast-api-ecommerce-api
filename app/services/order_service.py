@@ -54,21 +54,21 @@ def _recompute_totals(order: Order) -> None:
 
 async def _reserve_stock(db: AsyncSession, variant: ProductVariant, quantity: int, reason: str | None) -> None:
     try:
-        await run_sync(db, inventory_service.reserve_stock, variant, quantity, reason)
+        await inventory_service.reserve_stock(db, variant, quantity, reason)
     except ServiceError as exc:
         raise ConflictError(exc.detail) from exc
 
 
 async def _release_stock(db: AsyncSession, variant: ProductVariant, quantity: int, reason: str | None) -> None:
     try:
-        await run_sync(db, inventory_service.release_stock, variant, quantity, reason)
+        await inventory_service.release_stock(db, variant, quantity, reason)
     except ServiceError as exc:
         raise ConflictError(exc.detail) from exc
 
 
 async def _commit_sale(db: AsyncSession, variant: ProductVariant, quantity: int, reason: str | None) -> None:
     try:
-        await run_sync(db, inventory_service.commit_sale, variant, quantity, reason)
+        await inventory_service.commit_sale(db, variant, quantity, reason)
     except ServiceError as exc:
         raise ConflictError(exc.detail) from exc
 

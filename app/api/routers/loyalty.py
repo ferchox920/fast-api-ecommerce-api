@@ -1,10 +1,10 @@
 from typing import Optional
 
 from fastapi import APIRouter, Depends, Query, Security, HTTPException, status
-from sqlalchemy.orm import Session
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_current_user
-from app.db.session import get_db
+from app.db.session_async import get_async_db
 from app.models.user import User
 from app.schemas.loyalty import LoyaltyProfileRead, LoyaltyAdjustPayload, LoyaltyRedeemPayload
 from app.services import loyalty_service
@@ -13,42 +13,30 @@ router = APIRouter(prefix="/loyalty", tags=["loyalty"])
 
 
 @router.get("/profile", response_model=LoyaltyProfileRead)
-def get_profile(
+async def get_profile(
     user_id: Optional[str] = Query(default=None),
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_async_db),
     current_user: User = Security(get_current_user, scopes=["users:me"]),
 ):
     target_user = user_id or current_user.id
-    profile = loyalty_service.get_profile(db, target_user)
-    return LoyaltyProfileRead(
-        user_id=profile.customer_id,
-        level=profile.level,
-        points=profile.points,
-        progress_json=profile.progress_json,
-        updated_at=profile.updated_at,
-    )
+    profile = await loyalty_service.get_profile(db, target_user)
+    return LoyaltyProfileRead.model_validate(profile)
 
 
 @router.post("/adjust", response_model=LoyaltyProfileRead)
-def adjust_profile(
+async def adjust_profile(
     payload: LoyaltyAdjustPayload,
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_async_db),
     current_user: User = Security(get_current_user, scopes=["admin"]),
 ):
-    profile = loyalty_service.apply_adjustment(db, payload)
-    return LoyaltyProfileRead(
-        user_id=profile.customer_id,
-        level=profile.level,
-        points=profile.points,
-        progress_json=profile.progress_json,
-        updated_at=profile.updated_at,
-    )
+    profile = await loyalty_service.apply_adjustment(db, payload)
+    return LoyaltyProfileRead.model_validate(profile)
 
 
 @router.post("/redeem", response_model=LoyaltyProfileRead)
-def redeem_reward(
+async def redeem_reward(
     payload: LoyaltyRedeemPayload,
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_async_db),
     current_user: User = Security(get_current_user, scopes=["users:me"]),
 ):
     target_user = payload.user_id or current_user.id
@@ -59,21 +47,15 @@ def redeem_reward(
         metadata=payload.metadata,
     )
     try:
-        profile = loyalty_service.redeem_reward(db, redeem_payload)
+        profile = await loyalty_service.redeem_reward(db, redeem_payload)
     except ValueError as exc:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, detail=str(exc))
-    return LoyaltyProfileRead(
-        user_id=profile.customer_id,
-        level=profile.level,
-        points=profile.points,
-        progress_json=profile.progress_json,
-        updated_at=profile.updated_at,
-    )
+    return LoyaltyProfileRead.model_validate(profile)
 
 
 @router.get("/levels")
-def list_levels(db: Session = Depends(get_db)):
-    levels = loyalty_service.list_levels(db)
+async def list_levels(db: AsyncSession = Depends(get_async_db)):
+    levels = await loyalty_service.list_levels(db)
     return [
         {
             "level": level.level,

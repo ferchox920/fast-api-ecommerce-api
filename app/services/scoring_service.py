@@ -10,9 +10,10 @@ from typing import Dict
 from uuid import UUID as UUIDType
 
 from sqlalchemy import select
-from sqlalchemy.orm import Session
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
+from app.db.operations import flush_async, run_sync
 from app.models.engagement import ProductEngagementDaily, ProductRanking
 from app.services import catalog_client
 
@@ -39,14 +40,13 @@ def _freshness_factor(age_days: float) -> float:
     return exp(-age_days * 0.693 / FRESHNESS_HALF_LIFE)
 
 
-def _load_engagement(db: Session, window_days: int):
+async def _load_engagement(db: AsyncSession, window_days: int):
     today = datetime.now(timezone.utc).date()
     start_date = today - timedelta(days=window_days - 1)
-    records = (
-        db.execute(select(ProductEngagementDaily).where(ProductEngagementDaily.date >= start_date))
-        .scalars()
-        .all()
+    result = await db.execute(
+        select(ProductEngagementDaily).where(ProductEngagementDaily.date >= start_date)
     )
+    records = result.scalars().all()
     grouped: dict[str, dict[str, float]] = defaultdict(
         lambda: {
             "views": 0.0,
@@ -74,8 +74,8 @@ def _load_engagement(db: Session, window_days: int):
     return grouped
 
 
-def run_scoring(db: Session, window_days: int = WINDOW_DAYS) -> dict:
-    engagements = _load_engagement(db, window_days)
+async def run_scoring(db: AsyncSession, window_days: int = WINDOW_DAYS) -> dict:
+    engagements = await _load_engagement(db, window_days)
     if not engagements:
         return {"updated": [], "count": 0, "window_days": window_days}
 
@@ -93,7 +93,7 @@ def run_scoring(db: Session, window_days: int = WINDOW_DAYS) -> dict:
             + metrics["purchases"] * 1.2
         )
 
-        fin = catalog_client.get_financial_metrics(db, product_uuid)
+        fin = await run_sync(db, catalog_client.get_financial_metrics, product_uuid)
         margin = fin.get("margin", Decimal("0"))
         stock = fin.get("stock_on_hand", 0)
 
@@ -133,7 +133,7 @@ def run_scoring(db: Session, window_days: int = WINDOW_DAYS) -> dict:
             4,
         )
 
-        ranking = db.get(ProductRanking, product_uuid)
+        ranking = await db.get(ProductRanking, product_uuid)
         if not ranking:
             ranking = ProductRanking(product_id=product_uuid)
             db.add(ranking)
@@ -146,10 +146,11 @@ def run_scoring(db: Session, window_days: int = WINDOW_DAYS) -> dict:
         ranking.updated_at = now
         updated.append(str(product_uuid))
 
-    db.commit()
+    await flush_async(db)
     return {"updated": updated, "count": len(updated), "window_days": window_days}
 
 
-def get_latest_rankings(db: Session, limit: int = 20):
+async def get_latest_rankings(db: AsyncSession, limit: int = 20):
     stmt = select(ProductRanking).order_by(ProductRanking.exposure_score.desc()).limit(limit)
-    return db.execute(stmt).scalars().all()
+    result = await db.execute(stmt)
+    return result.scalars().all()

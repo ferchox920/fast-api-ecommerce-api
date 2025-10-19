@@ -2,9 +2,9 @@ from datetime import date, datetime, timezone
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, Query, status
-from sqlalchemy.orm import Session
+from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.db.session import get_db
+from app.db.session_async import get_async_db
 from app.schemas.engagement import EventCreate, ProductEngagementRead, CustomerEngagementRead
 from app.services import engagement_service
 
@@ -13,9 +13,14 @@ router = APIRouter(prefix="/events", tags=["engagement"])
 
 # INTEGRATION: Frontend tracking enviará POST /events con {event_type, product_id, user_id, ts, metadata}.
 @router.post("", status_code=status.HTTP_202_ACCEPTED, response_model=ProductEngagementRead)
-def ingest_event(payload: EventCreate, db: Session = Depends(get_db)):
+async def ingest_event(payload: EventCreate, db: AsyncSession = Depends(get_async_db)):
     # INTEGRATION(security): rate limit IP/user en /events; firmar webhooks internos.
-    record = engagement_service.record_event(db, payload)
+    try:
+        record = await engagement_service.record_event(db, payload)
+        await db.commit()
+    except Exception:
+        await db.rollback()
+        raise
     if record is None:
         return ProductEngagementRead(
             product_id=payload.product_id,
@@ -38,8 +43,8 @@ def ingest_event(payload: EventCreate, db: Session = Depends(get_db)):
 
 
 @router.get("/products/{product_id}", response_model=list[ProductEngagementRead])
-def get_product_engagement(product_id: UUID, day: date | None = Query(default=None), db: Session = Depends(get_db)):
-    records = engagement_service.get_product_engagement(db, product_id, day)
+async def get_product_engagement(product_id: UUID, day: date | None = Query(default=None), db: AsyncSession = Depends(get_async_db)):
+    records = await engagement_service.get_product_engagement(db, product_id, day)
     return [
         ProductEngagementRead(
             product_id=r.product_id,
@@ -55,8 +60,8 @@ def get_product_engagement(product_id: UUID, day: date | None = Query(default=No
 
 
 @router.get("/customers/{user_id}", response_model=list[CustomerEngagementRead])
-def get_customer_engagement(user_id: UUID, day: date | None = Query(default=None), db: Session = Depends(get_db)):
-    records = engagement_service.get_customer_engagement(db, user_id, day)
+async def get_customer_engagement(user_id: UUID, day: date | None = Query(default=None), db: AsyncSession = Depends(get_async_db)):
+    records = await engagement_service.get_customer_engagement(db, user_id, day)
     return [
         CustomerEngagementRead(
             customer_id=r.customer_id,
