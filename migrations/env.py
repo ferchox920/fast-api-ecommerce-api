@@ -38,17 +38,24 @@ config = context.config
 if config.config_file_name is not None:
     fileConfig(config.config_file_name)
 
-# Inyectar la URL desde settings (en vez de alembic.ini)
-config.set_main_option("sqlalchemy.url", settings.DATABASE_URL)
+# Elegimos la URL para Alembic (SIEMPRE sync)
+# 1) Usa ALEMBIC_DATABASE_URL si existe
+# 2) Si solo hay DATABASE_URL y es async, la convertimos a psycopg (sync)
+alembic_url = getattr(settings, "ALEMBIC_DATABASE_URL", None) or settings.DATABASE_URL
+if alembic_url.startswith("postgresql+asyncpg"):
+    alembic_url = alembic_url.replace("+asyncpg", "+psycopg")
+
+# Inyectar la URL definitiva a Alembic
+config.set_main_option("sqlalchemy.url", alembic_url)
 
 # Metadata objetivo para autogenerate
 target_metadata = Base.metadata
 
+
 def run_migrations_offline() -> None:
     """Ejecuta migraciones en modo offline (sin Engine)."""
-    url = settings.DATABASE_URL
     context.configure(
-        url=url,
+        url=alembic_url,
         target_metadata=target_metadata,
         literal_binds=True,
         dialect_opts={"paramstyle": "named"},
@@ -57,6 +64,7 @@ def run_migrations_offline() -> None:
     )
     with context.begin_transaction():
         context.run_migrations()
+
 
 def run_migrations_online() -> None:
     """Ejecuta migraciones en modo online (con Engine/Connection)."""
@@ -74,6 +82,7 @@ def run_migrations_online() -> None:
         )
         with context.begin_transaction():
             context.run_migrations()
+
 
 if context.is_offline_mode():
     run_migrations_offline()

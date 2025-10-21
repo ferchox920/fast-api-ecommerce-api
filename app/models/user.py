@@ -1,13 +1,53 @@
 # app/models/user.py
+from __future__ import annotations
+
+import uuid
 from sqlalchemy.orm import Mapped, mapped_column
 from sqlalchemy import String, Boolean, DateTime, func, Index
-from uuid import uuid4
+from sqlalchemy.dialects.postgresql import UUID as PGUUID
+from sqlalchemy.types import TypeDecorator
 from app.db.session import Base
+
+
+class GUID(TypeDecorator):
+    """Tipo UUID portable.
+    - En PostgreSQL usa UUID nativo (as_uuid=True)
+    - En SQLite/otros usa String(36)
+    """
+    impl = String(36)
+    cache_ok = True
+
+    def load_dialect_impl(self, dialect):
+        if dialect.name == "postgresql":
+            return dialect.type_descriptor(PGUUID(as_uuid=True))
+        return dialect.type_descriptor(String(36))
+
+    def process_bind_param(self, value, dialect):
+        if value is None:
+            return value
+        if isinstance(value, uuid.UUID):
+            return str(value) if dialect.name != "postgresql" else value
+        # si viene como str, normalizamos
+        return str(uuid.UUID(str(value)))
+
+    def process_result_value(self, value, dialect):
+        if value is None:
+            return value
+        # devolvemos siempre uuid.UUID en Python
+        return uuid.UUID(str(value))
+
 
 class User(Base):
     __tablename__ = "users"
 
-    id: Mapped[str] = mapped_column(String, primary_key=True, default=lambda: str(uuid4()))
+    # Generamos el UUID en Python para que funcione en SQLite y Postgres.
+    id: Mapped[uuid.UUID] = mapped_column(
+        GUID(),
+        primary_key=True,
+        default=uuid.uuid4,      # 👈 genera en app (compatible con SQLite)
+        nullable=False,
+    )
+
     email: Mapped[str] = mapped_column(String(320), unique=True, index=True, nullable=False)
     full_name: Mapped[str | None] = mapped_column(String(200), nullable=True)
 
@@ -33,12 +73,19 @@ class User(Base):
     avatar_url:    Mapped[str | None] = mapped_column(String(512), nullable=True)
 
     # OAuth
-    oauth_provider: Mapped[str | None] = mapped_column(String(50), nullable=True)   # "google", "github", ...
-    oauth_sub:      Mapped[str | None] = mapped_column(String(255), nullable=True)  # subject del IdP
+    oauth_provider: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    oauth_sub:      Mapped[str | None] = mapped_column(String(255), nullable=True)
     oauth_picture:  Mapped[str | None] = mapped_column(String(512), nullable=True)
 
     # Auditoría
     created_at = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
-    updated_at = mapped_column(DateTime(timezone=True), onupdate=func.now())
+    updated_at = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        onupdate=func.now(),
+        nullable=False,
+    )
 
-Index("ix_user_oauth_provider_sub", User.oauth_provider, User.oauth_sub, unique=False)
+    __table_args__ = (
+        Index("ix_user_oauth_provider_sub", "oauth_provider", "oauth_sub", unique=False),
+    )

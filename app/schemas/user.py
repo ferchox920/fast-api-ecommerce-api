@@ -1,6 +1,7 @@
 # app/schemas/user.py
 from pydantic import BaseModel, EmailStr, Field, ConfigDict, HttpUrl
 from typing import Optional, List
+from uuid import UUID  # 👈 nuevo
 
 class UserBase(BaseModel):
     email: EmailStr
@@ -14,10 +15,7 @@ class UserBase(BaseModel):
     country: str | None = None
     phone: str | None = None
 
-    birthdate: str | None = Field(
-        default=None,
-        pattern=r"^\d{4}-\d{2}-\d{2}$"
-    )
+    birthdate: str | None = Field(default=None, pattern=r"^\d{4}-\d{2}-\d{2}$")
     avatar_url: HttpUrl | None = None
 
 
@@ -43,15 +41,12 @@ class UserUpdate(BaseModel):
     postal_code: str | None = None
     country: str | None = None
     phone: str | None = None
-    birthdate: str | None = Field(
-        default=None,
-        pattern=r"^\d{4}-\d{2}-\d{2}$"
-    )
+    birthdate: str | None = Field(default=None, pattern=r"^\d{4}-\d{2}-\d{2}$")
     avatar_url: HttpUrl | None = None
 
 
 class UserRead(UserBase):
-    id: str
+    id: UUID  # 👈 antes: str
     is_active: bool
     is_superuser: bool
     email_verified: bool
@@ -60,7 +55,6 @@ class UserRead(UserBase):
     oauth_sub: str | None = None
     oauth_picture: HttpUrl | None = None
 
-    # Pydantic v2
     model_config = ConfigDict(from_attributes=True)
 
 
@@ -70,12 +64,12 @@ class Token(BaseModel):
 
 
 class TokenPayload(BaseModel):
+    # Si querés ser ultra-estricto podés usar UUID | str.
     sub: str | None = None
     exp: Optional[int] = None
     iat: Optional[int] = None
     jti: Optional[str] = None
-    type: Optional[str] = None                 # "access" | "refresh" | "verify_email"
-    scopes: Optional[List[str]] = None         # scopes opcionales
+    type: Optional[str] = None
+    scopes: Optional[List[str]] = None
 
-    # Permitir campos extra para compatibilidad futura
     model_config = ConfigDict(extra="allow")

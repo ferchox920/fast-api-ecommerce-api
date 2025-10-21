@@ -1,7 +1,7 @@
 """catalog with UUID everywhere
 
 Revision ID: d55b5acc16c3
-Revises: 
+Revises: e64f80be94b5
 Create Date: 2025-09-12 12:06:15.471680
 """
 from typing import Sequence, Union
@@ -9,10 +9,9 @@ from typing import Sequence, Union
 from alembic import op
 import sqlalchemy as sa
 
-
 # revision identifiers, used by Alembic.
 revision: str = 'd55b5acc16c3'
-down_revision: Union[str, Sequence[str], None] = None
+down_revision: Union[str, Sequence[str], None] = 'e64f80be94b5'
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
@@ -97,11 +96,8 @@ def upgrade() -> None:
         sa.UniqueConstraint('sku')
     )
 
-    # 🔧 FIX: agregar con valor por defecto para evitar NotNullViolation
-    op.add_column(
-        'users',
-        sa.Column('email_verified', sa.Boolean(), nullable=False, server_default=sa.false())
-    )
+    # Campos extra en users (users ya existe por e64f80be94b5)
+    op.add_column('users', sa.Column('email_verified', sa.Boolean(), nullable=False, server_default=sa.false()))
     op.add_column('users', sa.Column('last_login_at', sa.DateTime(timezone=True), nullable=True))
     op.add_column('users', sa.Column('address_line1', sa.String(length=200), nullable=True))
     op.add_column('users', sa.Column('address_line2', sa.String(length=200), nullable=True))
@@ -115,7 +111,8 @@ def upgrade() -> None:
     op.add_column('users', sa.Column('oauth_provider', sa.String(length=50), nullable=True))
     op.add_column('users', sa.Column('oauth_sub', sa.String(length=255), nullable=True))
     op.add_column('users', sa.Column('oauth_picture', sa.String(length=512), nullable=True))
-    op.add_column('users', sa.Column('updated_at', sa.DateTime(timezone=True), nullable=True))
+    # 🔻 QUITADO: updated_at (ya existe en init users)
+    # op.add_column('users', sa.Column('updated_at', sa.DateTime(timezone=True), nullable=True))
     op.alter_column('users', 'hashed_password', existing_type=sa.VARCHAR(), nullable=True)
     op.create_index('ix_user_oauth_provider_sub', 'users', ['oauth_provider', 'oauth_sub'], unique=False)
     # ### end Alembic commands ###
@@ -125,7 +122,7 @@ def downgrade() -> None:
     """Downgrade schema."""
     op.drop_index('ix_user_oauth_provider_sub', table_name='users')
     op.alter_column('users', 'hashed_password', existing_type=sa.VARCHAR(), nullable=False)
-    op.drop_column('users', 'updated_at')
+    # (no tocamos updated_at porque no lo agregamos aquí)
     op.drop_column('users', 'oauth_picture')
     op.drop_column('users', 'oauth_sub')
     op.drop_column('users', 'oauth_provider')

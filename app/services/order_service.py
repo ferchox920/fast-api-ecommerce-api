@@ -92,9 +92,9 @@ async def list_orders(
     stmt = (
         select(Order)
         .options(
-        selectinload(Order.lines),
-        selectinload(Order.payments),
-        selectinload(Order.shipments),
+            selectinload(Order.lines),
+            selectinload(Order.payments),
+            selectinload(Order.shipments),
         )
         .order_by(Order.created_at.desc())
         .offset(offset)
@@ -159,7 +159,7 @@ async def _add_line(
 
 async def create_order(db: AsyncSession, current_user_id: str | None, payload: OrderCreate) -> Order:
     order = Order(
-        user_id=current_user_id,
+        user_id=str(current_user_id) if current_user_id is not None else None,
         currency=payload.currency or "ARS",
         status=OrderStatus.draft,
         payment_status=PaymentStatus.pending,
@@ -209,7 +209,7 @@ async def create_order_from_cart(db: AsyncSession, cart: Cart) -> Order:
     await db.refresh(cart, attribute_names=["items"])
 
     order = Order(
-        user_id=cart.user_id,
+        user_id=str(cart.user_id) if cart.user_id is not None else None,
         currency=cart.currency,
         status=OrderStatus.draft,
         payment_status=PaymentStatus.pending,
@@ -239,12 +239,15 @@ async def create_order_from_cart(db: AsyncSession, cart: Cart) -> Order:
     db.add(order)
     await db.flush()
 
+    # ⬇️ Igualamos el comportamiento al de create_order:
+    await notification_service.notify_new_order(db, order)
     await notification_service.notify_order_status(
         db,
         order,
-        title="Pago acreditado",
-        message="Tu pago fue recibido y la orden está confirmada.",
+        title="Orden creada",
+        message="Tu orden ha sido creada y está pendiente de pago.",
     )
+
     await _load_order_eager(db, order)
     return order
 

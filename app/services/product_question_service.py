@@ -35,7 +35,8 @@ async def list_questions(
         .order_by(ProductQuestion.created_at.desc())
     )
     if product_id:
-        stmt = stmt.where(ProductQuestion.product_id == product_id)
+        # IMPORTANTE: comparar con UUID, no con str
+        stmt = stmt.where(ProductQuestion.product_id == _as_uuid(product_id, "product_id"))
     if not include_hidden:
         stmt = stmt.where(
             ProductQuestion.is_visible == True,  # noqa: E712
@@ -66,8 +67,8 @@ async def create_question(
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Product not found")
 
     question = ProductQuestion(
-        product_id=product.id,
-        user_id=user.id if user else None,
+        product_id=product.id,                 # UUID OK
+        user_id=str(user.id) if user else None,  # user_id es texto en tu modelo
         content=payload.content,
     )
     db.add(question)
@@ -90,7 +91,7 @@ async def create_answer(
 
     answer = ProductAnswer(
         question=question,
-        admin_id=admin.id,
+        admin_id=str(admin.id),  # admin_id es texto en tu modelo
         content=payload.content,
     )
     db.add(answer)

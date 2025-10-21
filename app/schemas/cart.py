@@ -1,12 +1,18 @@
+# app/schemas/cart.py
 from __future__ import annotations
 from pydantic import BaseModel, Field, ConfigDict
 from typing import List, Optional
 from uuid import UUID
 from datetime import datetime
 
+# Evitá ciclos importando el Enum desde un módulo común.
+# Si aún no lo tenés, creá app/domain/enums.py con CartStatus.
+from app.domain.enums import CartStatus
+
 
 class CartItemCreate(BaseModel):
-    variant_id: UUID | str
+    # Pydantic v2 parsea strings UUID sin problema si el tipo es UUID
+    variant_id: UUID
     quantity: int = Field(..., gt=0)
 
 
@@ -32,15 +38,21 @@ class CartItemRead(BaseModel):
 
 class CartRead(BaseModel):
     id: UUID
-    user_id: str | None
+    # <--- antes era str | None: cámbialo a UUID | None
+    user_id: UUID | None
     guest_token: str | None
-    status: str
+
+    # <--- antes era str: tipalo con el Enum real
+    status: CartStatus
     currency: str
+
     subtotal_amount: float
     discount_amount: float
     total_amount: float
+
     created_at: datetime
     updated_at: datetime | None
+
     items: List[CartItemRead] = Field(default_factory=list)
 
     model_config = ConfigDict(from_attributes=True)

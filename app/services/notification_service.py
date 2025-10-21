@@ -24,9 +24,10 @@ def _utcnow() -> datetime:
 
 
 async def list_notifications(db: AsyncSession, user: User, limit: int = 50, offset: int = 0) -> list[Notification]:
+    # Notification.user_id es String; aseguramos comparar con str(user.id)
     stmt = (
         select(Notification)
-        .where(Notification.user_id == user.id)
+        .where(Notification.user_id == str(user.id))
         .order_by(Notification.created_at.desc())
         .offset(offset)
         .limit(limit)
@@ -35,8 +36,18 @@ async def list_notifications(db: AsyncSession, user: User, limit: int = 50, offs
     return result.scalars().all()
 
 
-async def _get_user(db: AsyncSession, user_id: str) -> User | None:
-    return await db.get(User, user_id)
+async def _get_user(db: AsyncSession, user_id: str | uuid.UUID) -> User | None:
+    """
+    Devuelve el usuario por PK. Si el PK del modelo User es UUID,
+    convertimos el valor entrante a UUID de forma segura.
+    """
+    pk = user_id
+    try:
+        pk = uuid.UUID(str(user_id))
+    except Exception:
+        # Si el PK no es UUID en tu modelo, se intentará con el valor original
+        pass
+    return await db.get(User, pk)
 
 
 async def create_notification(
@@ -46,7 +57,7 @@ async def create_notification(
     send_email: bool = False,
 ) -> Notification:
     notification = Notification(
-        user_id=data.user_id,
+        user_id=str(data.user_id),
         type=NotificationType(data.type),
         title=data.title,
         message=data.message,
@@ -65,7 +76,8 @@ async def create_notification(
         "created_at": notification.created_at.isoformat(),
     }
 
-    asyncio.create_task(ws_manager.send_to_user(notification.user_id, payload))
+    # user_id para websockets es string
+    asyncio.create_task(ws_manager.send_to_user(str(notification.user_id), payload))
 
     if send_email:
         user = await _get_user(db, notification.user_id)
@@ -91,7 +103,7 @@ async def mark_read(
         raise DomainValidationError("Invalid notification id") from exc
 
     notification = await db.get(Notification, notif_uuid)
-    if not notification or notification.user_id != user.id:
+    if not notification or str(notification.user_id) != str(user.id):
         raise ResourceNotFoundError("Notification not found")
 
     notification.is_read = payload.is_read
@@ -103,6 +115,7 @@ async def mark_read(
 
 
 async def _iter_admins(db: AsyncSession) -> Iterable[User]:
+    # ojo: en tu proyecto usás is_superuser; respetamos eso
     stmt = select(User).where(User.is_superuser == True)  # noqa: E712
     result = await db.execute(stmt)
     return result.scalars().all()
@@ -114,7 +127,7 @@ async def notify_admin_new_question(db: AsyncSession, question: ProductQuestion)
     message = f"Pregunta sobre producto {question.product_id}: {question.content[:140]}"
     for admin in admins:
         data = NotificationCreate(
-            user_id=admin.id,
+            user_id=str(admin.id),
             type=NotificationType.product_question.value,
             title=title,
             message=message,
@@ -127,7 +140,7 @@ async def notify_question_answer(db: AsyncSession, question: ProductQuestion, an
     if not question.user_id:
         return
     data = NotificationCreate(
-        user_id=question.user_id,
+        user_id=str(question.user_id),
         type=NotificationType.product_answer.value,
         title="Respuesta a tu pregunta",
         message=answer.content[:200],
@@ -144,7 +157,7 @@ async def notify_order_status(db: AsyncSession, order: Order, title: str, messag
     if not order.user_id:
         return
     data = NotificationCreate(
-        user_id=order.user_id,
+        user_id=str(order.user_id),
         type=NotificationType.order_status.value,
         title=title,
         message=message,
@@ -164,7 +177,7 @@ async def notify_new_order(db: AsyncSession, order: Order) -> None:
     message = f"Orden {order.id} por total {order.total_amount}"
     for admin in admins:
         data = NotificationCreate(
-            user_id=admin.id,
+            user_id=str(admin.id),
             type=NotificationType.new_order.value,
             title=title,
             message=message,
@@ -179,7 +192,7 @@ async def notify_new_promotion(db: AsyncSession, promotion) -> None:
     message = f"{promotion.name} activo hasta {promotion.end_at.date()}"
     for admin in admins:
         data = NotificationCreate(
-            user_id=admin.id,
+            user_id=str(admin.id),
             type=NotificationType.promotion.value,
             title=title,
             message=message,
@@ -190,7 +203,7 @@ async def notify_new_promotion(db: AsyncSession, promotion) -> None:
 
 async def notify_loyalty_upgrade(db: AsyncSession, profile, previous_level: str) -> None:
     data = NotificationCreate(
-        user_id=profile.customer_id,
+        user_id=str(profile.customer_id),
         type=NotificationType.loyalty.value,
         title="Subiste de nivel",
         message=f"Bienvenido al nivel {profile.level} (antes {previous_level}).",

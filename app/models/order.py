@@ -37,7 +37,8 @@ class Order(Base):
     __tablename__ = "orders"
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    # Usuario comprador (puede ser null si se borra el usuario)
+
+    # ✅ String para compat con SQLite; FK al texto de users.id
     user_id: Mapped[str | None] = mapped_column(
         String, ForeignKey("users.id", ondelete="SET NULL"), nullable=True
     )
