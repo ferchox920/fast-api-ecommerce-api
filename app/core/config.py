@@ -1,9 +1,8 @@
-# app/core/config.py
 """Application configuration with strict environment validation."""
 
 from pathlib import Path
-
-from pydantic import Field, field_validator, model_validator
+import warnings
+from pydantic import Field, field_validator, model_validator, EmailStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -23,7 +22,9 @@ class Settings(BaseSettings):
     # --- Security & database ---
     SECRET_KEY: str = Field(..., min_length=16)
     REFRESH_SECRET_KEY: str | None = None
-    DATABASE_URL: str = "sqlite:///./test.db"
+    # Cambia el valor predeterminado si usas PostgreSQL por defecto
+    DATABASE_URL: str = "postgresql://user:password@localhost:5432/appdb" # Ejemplo PostgreSQL
+    # DATABASE_URL: str = "sqlite:///./test.db" # Ejemplo SQLite anterior
     ASYNC_DATABASE_URL: str | None = None
     REDIS_URL: str | None = None
     SECRET_KEY_FALLBACKS: list[str] = Field(default_factory=list)
@@ -108,6 +109,11 @@ class Settings(BaseSettings):
     WISH_QUEUE: str = "wish-events"
     TASK_RESULT_TIMEOUT: int = 30
 
+    # --- Configuración del Admin Inicial ---
+    INITIAL_ADMIN_EMAIL: EmailStr | None = Field(default=None, description="Email for the first admin user created on startup if none exists.")
+    INITIAL_ADMIN_PASSWORD: str | None = Field(default=None, min_length=8, description="Password for the first admin user.")
+
+
     @staticmethod
     def _split_list(value: str | list[str] | None) -> list[str]:
         if not value:
@@ -146,7 +152,9 @@ class Settings(BaseSettings):
     @classmethod
     def validate_metric_buckets(cls, value: str | list[float] | None) -> list[float]:
         floats = cls._split_float_list(value)
-        return floats or cls.model_fields["METRICS_LATENCY_BUCKETS"].default_factory()  # type: ignore[attr-defined]
+        # Asegúrate que default_factory exista o proporciona un valor predeterminado directamente
+        default_buckets = [0.05, 0.1, 0.25, 0.5, 1.0, 2.0, 5.0]
+        return floats or default_buckets
 
     @field_validator("SECRET_KEY")
     @classmethod
@@ -167,17 +175,41 @@ class Settings(BaseSettings):
         """Ensure an async URL is always available."""
         if not self.ASYNC_DATABASE_URL:
             self.ASYNC_DATABASE_URL = self._derive_async_url(self.DATABASE_URL)
+        # Valida que la URL asíncrona no sea None después de derivarla
+        if not self.ASYNC_DATABASE_URL:
+             raise ValueError(f"Could not derive async database URL from: {self.DATABASE_URL}")
         return self
 
+    # Validador para admin inicial
+    @model_validator(mode="after")
+    def check_initial_admin_config(self) -> "Settings":
+        # Asegúrate que este validador se ejecute después de ensure_async_database_url
+        # Pydantic v2 ejecuta validadores en el orden definido
+        if self.INITIAL_ADMIN_EMAIL and not self.INITIAL_ADMIN_PASSWORD:
+            raise ValueError("INITIAL_ADMIN_PASSWORD must be set if INITIAL_ADMIN_EMAIL is set.")
+        if not self.INITIAL_ADMIN_EMAIL and self.INITIAL_ADMIN_PASSWORD:
+            warnings.warn("INITIAL_ADMIN_PASSWORD is set but INITIAL_ADMIN_EMAIL is not; initial admin will not be created.")
+        return self
+
+
     @staticmethod
-    def _derive_async_url(url: str) -> str:
+    def _derive_async_url(url: str | None) -> str | None: # Permitir None como entrada y salida
         """Best-effort conversion from sync to async driver."""
+        if not url: # Añadir chequeo por si DATABASE_URL no está definida
+             return None
         if "+asyncpg" in url or "+aiosqlite" in url:
             return url
         if url.startswith("sqlite"):
-            return url.replace("sqlite", "sqlite+aiosqlite", 1)
+            # Ensure compatibility with aiosqlite if DATABASE_URL is just sqlite:///path
+            if url.startswith("sqlite:///"):
+                return url.replace("sqlite:///", "sqlite+aiosqlite:///", 1)
+            # Asegura que solo reemplace una vez al principio
+            if url.startswith("sqlite:"):
+                 return url.replace("sqlite:", "sqlite+aiosqlite:", 1)
+            return url # Devuelve url original si no coincide con los patrones esperados
         if "://" not in url:
-            return url
+            # Podría ser una URL inválida o un DSN, devolverla tal cual o None/Error
+            return url # O considera lanzar un error si esperas siempre un formato URL
 
         scheme, rest = url.split("://", 1)
         if scheme.startswith("postgres"):
@@ -185,22 +217,34 @@ class Settings(BaseSettings):
             driver = None
             if "+" in scheme:
                 base_part, driver_part = scheme.split("+", 1)
-                base = "postgresql" if base_part.startswith("postgres") else base_part
+                # Asegura que base sea postgresql incluso si viene como postgres+driver
+                base = "postgresql" # if base_part.startswith("postgres") else base_part (simplificado)
                 driver = driver_part
-            if driver in (None, "", "psycopg", "psycopg2", "psycopg2cffi"):
-                async_scheme = f"{base}+asyncpg"
-            elif driver == "asyncpg":
+            # Simplificado: si no es asyncpg, intenta usar asyncpg
+            if driver != "asyncpg":
                 async_scheme = f"{base}+asyncpg"
             else:
-                async_scheme = f"{base}+{driver}"
+                 async_scheme = scheme # Ya tiene asyncpg
+
             return f"{async_scheme}://{rest}"
 
+        # Devuelve url original si no es sqlite o postgres
         return url
 
     @property
     def refresh_secret_fallback(self) -> str:
         """Return the refresh secret or fallback to the main secret."""
+        # Asegúrate que SECRET_KEY siempre tenga un valor (ya validado)
         return self.REFRESH_SECRET_KEY or self.SECRET_KEY
 
 
 settings = Settings()
+
+# Validar explícitamente después de la inicialización si hay problemas
+# try:
+#     settings = Settings()
+# except ValidationError as e:
+#     print(f"Error loading settings: {e}")
+#     import sys
+#     sys.exit(1)
+

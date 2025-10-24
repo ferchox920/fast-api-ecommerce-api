@@ -1,4 +1,5 @@
-﻿# app/main.py
+﻿import logging  # <-- Importar logging
+from contextlib import asynccontextmanager
 from fastapi import Depends, FastAPI, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.openapi.utils import get_openapi
@@ -33,12 +34,14 @@ from app.api.routers import (
     wishes,
 )
 from app.middleware import ObservabilityMiddleware, PayloadLimitMiddleware, SecurityHeadersMiddleware
+from app.initial_data import create_initial_admin_user  # <-- Importar
 
 # --- Models registration (necesario para que Alembic los detecte) ---
+# Es importante importar todos los modelos para que SQLAlchemy los conozca
 import app.models.product        # noqa: F401
 import app.models.inventory      # noqa: F401
-import app.models.supplier       # noqa: F401
-import app.models.purchase       # noqa: F401
+import app.models.supplier     # noqa: F401
+import app.models.purchase     # noqa: F401
 import app.models.order          # noqa: F401
 import app.models.cart           # noqa: F401
 import app.models.product_question  # noqa: F401
@@ -47,6 +50,8 @@ import app.models.engagement        # noqa: F401
 import app.models.promotion         # noqa: F401
 import app.models.loyalty           # noqa: F401
 import app.models.wish              # noqa: F401
+import app.models.user              # noqa: F401
+
 
 # --- Metadatos de la API para la documentación ---
 TAGS_METADATA = [
@@ -73,8 +78,25 @@ TAGS_METADATA = [
     {"name": "reports", "description": "Metricas y reportes de negocio."},
 ]
 
-setup_logging()
+setup_logging() # Configura el logging globalmente
 
+# --- Gestor de Ciclo de Vida (Lifespan) ---
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    logger = logging.getLogger("app.lifespan")
+    logger.info("Startup: preparando inicializaciones…")
+    try:
+        await create_initial_admin_user()
+    except Exception as e:
+        logger.exception("Error inicializando admin en startup: %s", e)
+    finally:
+        logger.info("Startup: finalizado.")
+    yield
+    logger.info("Shutdown: limpieza finalizada.")
+
+
+
+# Crear la instancia de la aplicación FastAPI
 app = FastAPI(
     title=settings.PROJECT_NAME,
     version="0.1.0",
@@ -96,7 +118,10 @@ app = FastAPI(
         "displayRequestDuration": True,
         "tryItOutEnabled": True,
     },
+    lifespan=lifespan  # <-- Asignar el lifespan a la app
 )
+
+# Registrar manejadores de excepciones personalizados
 register_exception_handlers(app)
 
 # --- Middlewares ---
@@ -107,11 +132,12 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-app.add_middleware(PayloadLimitMiddleware)
-app.add_middleware(ObservabilityMiddleware)
-app.add_middleware(SecurityHeadersMiddleware)
+app.add_middleware(PayloadLimitMiddleware) # Limita tamaño del payload
+app.add_middleware(ObservabilityMiddleware) # Añade métricas y tracing
+app.add_middleware(SecurityHeadersMiddleware) # Añade cabeceras de seguridad
 
 # --- Routers ---
+# Incluir todos los routers de los diferentes módulos de la API
 app.include_router(auth.router, prefix=settings.API_V1_STR)
 app.include_router(users.router, prefix=settings.API_V1_STR)
 app.include_router(admin.router, prefix=settings.API_V1_STR)
@@ -137,6 +163,7 @@ app.include_router(wishes.router, prefix=settings.API_V1_STR)
 
 
 # --- Configuración personalizada de OpenAPI ---
+# (Se usa para añadir logo, configurar autenticación Bearer por defecto, etc.)
 def custom_openapi():
     if app.openapi_schema:
         return app.openapi_schema
@@ -153,6 +180,7 @@ def custom_openapi():
         "url": "https://fastapi.tiangolo.com/img/logo-margin/logo-teal.png"
     }
 
+    # Configuración del esquema de seguridad Bearer JWT
     comps = openapi_schema.setdefault("components", {}).setdefault("securitySchemes", {})
     comps["BearerAuth"] = {
         "type": "http",
@@ -167,19 +195,19 @@ def custom_openapi():
     app.openapi_schema = openapi_schema
     return app.openapi_schema
 
-app.openapi = custom_openapi
+app.openapi = custom_openapi # Aplica la configuración personalizada
 
-# --- Endpoint raíz ---
+
+# --- Endpoints raíz y de métricas ---
 @app.get("/", include_in_schema=False)
 def root():
+    """Endpoint raíz para verificar el estado."""
     return {"status": "ok", "docs_url": "/docs", "redoc_url": "/redoc"}
 
 
 @app.get("/metrics", include_in_schema=False)
 def metrics(_: None = Depends(get_current_admin)) -> Response:
+    """Endpoint para exportar métricas de Prometheus (protegido por admin)."""
     payload, content_type = export_metrics()
     return Response(content=payload, media_type=content_type)
-
-
-
 
