@@ -2,6 +2,7 @@ aiosqlite
 asyncpg
 bcrypt<5
 celery
+cloudinary
 email-validator
 fastapi
 fixtures

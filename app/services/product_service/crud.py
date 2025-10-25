@@ -6,6 +6,8 @@ from app.db.operations import flush_async, refresh_async, rollback_async
 from app.models.product import Product, ProductVariant, ProductImage
 from app.schemas.product import ProductCreate, ProductUpdate
 from .utils import slugify, slug_exists, as_uuid
+from app.core.config import settings
+from app.services.cloudinary_service import upload_image_from_url
 
 
 async def create_product(db: AsyncSession, payload: ProductCreate) -> Product:
@@ -36,7 +38,18 @@ async def create_product(db: AsyncSession, payload: ProductCreate) -> Product:
             db.add(var)
 
         for i in payload.images:
-            img = ProductImage(product_id=prod.id, **i.model_dump())
+            image_data = i.model_dump()
+            if image_data.get("url") is not None:
+                original_url = str(image_data["url"])
+                image_data["url"] = original_url
+                if not original_url.startswith("https://res.cloudinary.com/"):
+                    uploaded_url = await upload_image_from_url(
+                        original_url,
+                        folder=f"{settings.CLOUDINARY_UPLOAD_FOLDER}/{prod.id}",
+                    )
+                    if uploaded_url:
+                        image_data["url"] = uploaded_url
+            img = ProductImage(product_id=prod.id, **image_data)
             db.add(img)
 
         await flush_async(db)

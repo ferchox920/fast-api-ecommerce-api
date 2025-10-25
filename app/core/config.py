@@ -76,6 +76,13 @@ class Settings(BaseSettings):
     MERCADO_PAGO_WEBHOOK_TOLERANCE_SECONDS: int = 300
     MERCADO_PAGO_WEBHOOK_REPLAY_TTL_SECONDS: int = 86400
 
+    # --- Cloudinary / Media storage ---
+    CLOUD_NAME_CLOUDINARY: str | None = None
+    API_KEY_CLOUDINARY: str | None = None
+    API_SECRET_CLOUDINARY: str | None = None
+    CLOUDINARY_UPLOAD_FOLDER: str = "products"
+    CLOUDINARY_SECURE_DELIVERY: bool = True
+
     # --- Exposure engine defaults ---
     EXPOSURE_POPULARITY_WEIGHT: float = 0.7
     EXPOSURE_STRATEGIC_WEIGHT: float = 0.3
@@ -247,4 +254,3 @@ settings = Settings()
 #     print(f"Error loading settings: {e}")
 #     import sys
 #     sys.exit(1)
-

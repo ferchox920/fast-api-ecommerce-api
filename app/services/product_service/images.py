@@ -7,6 +7,8 @@ from app.db.operations import flush_async, refresh_async
 from app.models.product import Product, ProductImage
 from app.schemas.product import ProductImageCreate
 from .utils import as_uuid
+from app.core.config import settings
+from app.services.cloudinary_service import upload_image_from_url
 
 
 async def add_image(db: AsyncSession, product_id: str, data: ProductImageCreate) -> ProductImage:
@@ -23,7 +25,15 @@ async def add_image(db: AsyncSession, product_id: str, data: ProductImageCreate)
 
     payload = data.model_dump()
     if payload.get("url") is not None:
-        payload["url"] = str(payload["url"])
+        original_url = str(payload["url"])
+        payload["url"] = original_url
+        if not original_url.startswith("https://res.cloudinary.com/"):
+            uploaded_url = await upload_image_from_url(
+                original_url,
+                folder=f"{settings.CLOUDINARY_UPLOAD_FOLDER}/{pid}",
+            )
+            if uploaded_url:
+                payload["url"] = uploaded_url
     if payload.get("sort_order") is None:
         payload["sort_order"] = max_sort + 1
 
