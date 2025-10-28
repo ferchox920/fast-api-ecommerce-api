@@ -24,10 +24,9 @@ def _utcnow() -> datetime:
 
 
 async def list_notifications(db: AsyncSession, user: User, limit: int = 50, offset: int = 0) -> list[Notification]:
-    # Notification.user_id es String; aseguramos comparar con str(user.id)
     stmt = (
         select(Notification)
-        .where(Notification.user_id == str(user.id))
+        .where(Notification.user_id == user.id)
         .order_by(Notification.created_at.desc())
         .offset(offset)
         .limit(limit)
@@ -57,7 +56,7 @@ async def create_notification(
     send_email: bool = False,
 ) -> Notification:
     notification = Notification(
-        user_id=str(data.user_id),
+        user_id=uuid.UUID(str(data.user_id)),
         type=NotificationType(data.type),
         title=data.title,
         message=data.message,
@@ -103,7 +102,7 @@ async def mark_read(
         raise DomainValidationError("Invalid notification id") from exc
 
     notification = await db.get(Notification, notif_uuid)
-    if not notification or str(notification.user_id) != str(user.id):
+    if not notification or notification.user_id != user.id:
         raise ResourceNotFoundError("Notification not found")
 
     notification.is_read = payload.is_read
